@@ -68,7 +68,8 @@ void help()
         << "    -u,--public-ip <ip>  Force public ip to given (default; auto)." << endl
         << "    -v,--verbosity <0 - 9>  Set the log verbosity from 0 to 9 (Default: 8)." << endl
         << "    -x,--peers <number>  Attempt to connect to given number of peers (Default: 5)." << endl
-        << "    -V,--version  Show the version and exit." << endl;
+        << "    -V,--version  Show the version and exit." << endl
+	    << "    -W,--watch  <contractAddress> Watch contract for transactions." << endl;
         exit(0);
 }
 
@@ -136,6 +137,9 @@ int main(int argc, char** argv)
 	string publicIP;
 	bool upnp = true;
 	string clientName;
+
+	bool watcherMode = false;
+	Address watchAddress;
 
 	// Init defaults
 	Defaults::get();
@@ -227,6 +231,10 @@ int main(int argc, char** argv)
 			help();
 		else if (arg == "-V" || arg == "--version")
 			version();
+		else if ((arg == "-W" || arg == "--watcher") && i + 1 < argc) {
+			watcherMode = true;
+			watchAddress = Address(fromHex(argv[++i]));
+		}
 		else
 			remoteHost = argv[i];
 	}
@@ -238,14 +246,58 @@ int main(int argc, char** argv)
 
 	cout << "Address: " << endl << toHex(us.address().asArray()) << endl;
 	c.startNetwork(listenPort, remoteHost, remotePort, mode, peers, publicIP, upnp);
-	eth::uint n = c.blockChain().details().number;
-	if (mining)
-		c.startMining();
-	while (true)
-	{
-		if (c.blockChain().details().number - n == mining)
-			c.stopMining();
-		this_thread::sleep_for(chrono::milliseconds(100));
+	
+	if(!watcherMode) {
+		eth::uint n = c.blockChain().details().number;
+		if (mining)
+			c.startMining();
+		while (true)
+		{
+			if (c.blockChain().details().number - n == mining)
+				c.stopMining();
+			this_thread::sleep_for(chrono::milliseconds(100));
+		}
+	} else {
+		c.lock();
+		h256 previousHash = c.blockChain().currentHash();
+		c.unlock();
+
+		while (true)
+		{
+			// new block found
+			if (c.blockChain().currentHash() == previousHash) {
+				this_thread::sleep_for(chrono::milliseconds(300));
+			} else {
+				// new block(s), iterate back until previous hash
+				c.lock();
+				auto const& st = c.state();
+				auto const& bc = c.blockChain();
+				for (auto h = bc.currentHash(); h != previousHash; h = bc.details(h).parent)
+				{
+					auto d = bc.details(h);
+					for (auto const& i: RLP(bc.block(h))[1])
+					{
+						Transaction t(i.data());
+						if(st.isContractAddress(t.receiveAddress) && watchAddress == t.receiveAddress) {
+							printf("FOUND: TRANSACTION");
+							if(st.contractStorage(t.receiveAddress, (u160)t.sender()) && t.value > 0) {
+								// OPEN SESAME!
+								printf("FOUND: GOOD TRANSACTION");
+								
+								// here we need to add network code to send to the rapsberry pi
+								// which will unlock the door
+								
+							} else {
+								printf("FOUND: CHEAP TRANSACTION");
+							}
+						}
+					}
+				}
+				
+				previousHash = bc.currentHash();
+				c.unlock();
+			}
+		}
 	}
 
 	return 0;
