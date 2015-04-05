@@ -390,15 +390,6 @@ void Host::addNode(NodeId const& _node, bi::address const& _addr, unsigned short
 		else
 			return;
 
-	if (_tcpPeerPort < 30300 || _tcpPeerPort > 30305)
-		cwarn << "Non-standard port being recorded: " << _tcpPeerPort;
-
-	if (_tcpPeerPort >= /*49152*/32768)
-	{
-		cwarn << "Private port being recorded - setting to 0";
-		_tcpPeerPort = 0;
-	}
-	
 	if (m_nodeTable)
 		m_nodeTable->addNode(Node(_node, NodeIPEndpoint(bi::udp::endpoint(_addr, _udpNodePort), bi::tcp::endpoint(_addr, _tcpPeerPort))));
 }
