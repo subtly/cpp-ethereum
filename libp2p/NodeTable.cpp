@@ -75,21 +75,10 @@ void NodeTable::processEvents()
 		m_nodeEventHandler->processEvents();
 }
 
-shared_ptr<NodeEntry> NodeTable::addNode(Public const& _pubk, NodeIPEndpoint const& _ep)
-{
-	auto node = Node(_pubk, _ep);
-	return addNode(node);
-}
-
 shared_ptr<NodeEntry> NodeTable::addNode(Node const& _node)
 {
-	// re-enable tcp checks when NAT hosts are handled by discover
-	// we handle when tcp endpoint is 0 below
-	if (_node.endpoint.address.to_string() == "0.0.0.0")
-	{
-		clog(NodeTableWarn) << "addNode Failed. Invalid UDP address" << LogTag::Url << "0.0.0.0" << "for" << _node.id;
+	if (!_node.endpoint)
 		return move(shared_ptr<NodeEntry>());
-	}
 	
 	// ping address to recover nodeid if nodeid is empty
 	if (!_node.id)
@@ -99,9 +88,7 @@ shared_ptr<NodeEntry> NodeTable::addNode(Node const& _node)
 			Guard l(x_pubkDiscoverPings);
 			m_pubkDiscoverPings[_node.endpoint.address] = std::chrono::steady_clock::now();
 		}
-		PingNode p(_node.endpoint, m_node.endpoint.address.to_string(), m_node.endpoint.udpPort);
-		p.sign(m_secret);
-		m_socketPointer->send(p);
+		ping(_node.endpoint);
 		return move(shared_ptr<NodeEntry>());
 	}
 	
@@ -114,9 +101,7 @@ shared_ptr<NodeEntry> NodeTable::addNode(Node const& _node)
 	shared_ptr<NodeEntry> ret(new NodeEntry(m_node, _node.id, _node.endpoint));
 	m_nodes[_node.id] = ret;
 	clog(NodeTableConnect) << "addNode pending for" << _node.endpoint;
-	PingNode p(_node.endpoint, m_node.endpoint.address.to_string(), m_node.endpoint.udpPort);
-	p.sign(m_secret);
-	m_socketPointer->send(p);
+	ping(_node.endpoint);
 	return ret;
 }
 
@@ -286,14 +271,14 @@ vector<shared_ptr<NodeEntry>> NodeTable::nearestNodeEntries(NodeId _target)
 	vector<shared_ptr<NodeEntry>> ret;
 	for (auto& nodes: found)
 		for (auto n: nodes.second)
-			if (n->endpoint.isAllowed())
+			if (ret.size() < s_bucketSize && !!n->endpoint && n->endpoint.isAllowed())
 				ret.push_back(n);
 	return move(ret);
 }
 
-void NodeTable::ping(bi::udp::endpoint _to) const
+void NodeTable::ping(NodeIPEndpoint _to) const
 {
-	PingNode p(_to, m_node.endpoint.address.to_string(), m_node.endpoint.udpPort);
+	PingNode p(m_node.endpoint, _to);
 	p.sign(m_secret);
 	m_socketPointer->send(p);
 }
@@ -458,11 +443,16 @@ void NodeTable::onReceived(UDPSocketFace*, bi::udp::endpoint const& _from, bytes
 							m_pubkDiscoverPings.erase(_from.address());
 						}
 						if (!haveNode(nodeid))
-							addNode(nodeid, NodeIPEndpoint(_from.address(), _from.port(), _from.port()));
+							addNode(Node(nodeid, NodeIPEndpoint(_from.address(), _from.port(), _from.port())));
 					}
 					else
 						return; // unsolicited pong; don't note node as active
 				}
+				
+				// update our endpoint address and UDP port
+				if ((!m_node.endpoint || !m_node.endpoint.isAllowed()) && isPublicAddress(in.destination.address))
+					m_node.endpoint.address = in.destination.address;
+				m_node.endpoint.udpPort = in.destination.udpPort;
 				
 				clog(NodeTableConnect) << "PONG from " << nodeid << _from;
 				break;
@@ -488,17 +478,22 @@ void NodeTable::onReceived(UDPSocketFace*, bi::udp::endpoint const& _from, bytes
 				}
 				
 				Neighbours in = Neighbours::fromBytesConstRef(_from, rlpBytes);
-				for (auto n: in.nodes)
-					addNode(n.node, NodeIPEndpoint(bi::address::from_string(n.ipAddress), n.udpPort, n.udpPort));
+				for (auto n: in.neighbours)
+					addNode(Node(n.node, n.endpoint));
 				break;
 			}
 
 			case FindNode::type:
 			{
 				FindNode in = FindNode::fromBytesConstRef(_from, rlpBytes);
+				if (RLPXDatagramFace::secondsSinceEpoch() > in.ts)
+				{
+					clog(NodeTableTriviaSummary) << "Received expired FindNode from " << _from.address().to_string() << ":" << _from.port();
+					return;
+				}
 
 				vector<shared_ptr<NodeEntry>> nearest = nearestNodeEntries(in.target);
-				static unsigned const nlimit = (m_socketPointer->maxDatagramSize - 111) / 87;
+				static unsigned const nlimit = (m_socketPointer->maxDatagramSize - 109) / 90;
 				for (unsigned offset = 0; offset < nearest.size(); offset += nlimit)
 				{
 					Neighbours out(_from, nearest, offset, nlimit);
@@ -514,16 +509,17 @@ void NodeTable::onReceived(UDPSocketFace*, bi::udp::endpoint const& _from, bytes
 			{
 				PingNode in = PingNode::fromBytesConstRef(_from, rlpBytes);
 				if (in.version != dev::p2p::c_protocolVersion)
+					return;
+				if (RLPXDatagramFace::secondsSinceEpoch() > in.ts)
 				{
-					if (auto n = nodeEntry(nodeid))
-						dropNode(n);
+					clog(NodeTableTriviaSummary) << "Received expired PingNode from " << _from.address().to_string() << ":" << _from.port();
 					return;
 				}
 				
-				// TODO: Feedback if _from.address() != in.ipAddress
-				addNode(nodeid, NodeIPEndpoint(_from.address(), _from.port(), in.tcpPort));
-				
-				Pong p(_from);
+				in.source.address = _from.address();
+				in.source.udpPort = _from.port();
+				addNode(Node(nodeid, in.source));
+				Pong p(in.source);
 				p.echo = sha3(rlpBytes);
 				p.sign(m_secret);
 				m_socketPointer->send(p);
@@ -599,26 +595,22 @@ void NodeTable::doRefreshBuckets(boost::system::error_code const& _ec)
 void PingNode::streamRLP(RLPStream& _s) const
 {
 	_s.appendList(4);
-	_s << dev::p2p::c_protocolVersion << ipAddress << tcpPort << ts;
+	_s << dev::p2p::c_protocolVersion;
+	source.streamRLP(_s);
+	destination.streamRLP(_s);
+	_s << ts;
 }
 
 void PingNode::interpretRLP(bytesConstRef _bytes)
 {
 	RLP r(_bytes);
-	if (r.itemCountStrict() == 3)
+	if (r.itemCountStrict() == 4 && r[0].isInt() && r[0].toInt<unsigned>(RLP::Strict) == dev::p2p::c_protocolVersion)
 	{
-		version = 2;
-		ipAddress = r[0].toString();
-		tcpPort = r[1].toInt<unsigned>(RLP::Strict);
-		ts = r[2].toInt<unsigned>(RLP::Strict);
-	}
-	else if (r.itemCountStrict() == 4)
-	{
-		version = r[0].toInt<unsigned>(RLP::Strict);
-		ipAddress = r[1].toString();
-		tcpPort = r[2].toInt<unsigned>(RLP::Strict);
-		ts = r[3].toInt<unsigned>(RLP::Strict);
+		version = dev::p2p::c_protocolVersion;
+		source.interpretRLP(r[1]);
+		destination.interpretRLP(r[2]);
+		ts = r[3].toInt<uint32_t>(RLP::Strict);
 	}
 	else
-		BOOST_THROW_EXCEPTION(InvalidRLP());
+		version = 0;
 }
