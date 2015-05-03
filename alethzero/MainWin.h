@@ -83,7 +83,7 @@ public:
 	QString pretty(dev::Address _a) const override;
 	QString prettyU256(dev::u256 _n) const override;
 	QString render(dev::Address _a) const override;
-	dev::Address fromString(QString const& _a) const override;
+	std::pair<dev::Address, dev::bytes> fromString(QString const& _a) const override;
 	std::string renderDiff(dev::eth::StateDiff const& _d) const override;
 
 	QList<dev::KeyPair> owned() const { return m_myIdentities + m_myKeys; }
@@ -134,6 +134,7 @@ private slots:
 	// Tools
 	void on_newTransaction_triggered();
 	void on_loadJS_triggered();
+	void on_exportState_triggered();
 
 	// Stuff concerning the blocks/transactions/accounts panels
 	void ourAccountsRowsMoved();
@@ -159,6 +160,7 @@ private slots:
 	void on_killBlockchain_triggered();
 	void on_clearPending_triggered();
 	void on_inject_triggered();
+	void on_injectBlock_triggered();
 	void on_forceMining_triggered();
 	void on_usePrivate_triggered();
 	void on_turboMining_triggered();

@@ -46,6 +46,7 @@
 #include <libdevcrypto/FileSystem.h>
 #include <libethcore/CommonJS.h>
 #include <libethcore/EthashAux.h>
+#include <libethcore/ICAP.h>
 #include <liblll/Compiler.h>
 #include <liblll/CodeFragment.h>
 #include <libsolidity/Scanner.h>
@@ -71,6 +72,7 @@
 #include "DappLoader.h"
 #include "DappHost.h"
 #include "WebPage.h"
+#include "ExportState.h"
 #include "ui_Main.h"
 using namespace std;
 using namespace dev;
@@ -116,6 +118,11 @@ QString contentsOfQResource(string const& res)
 Address c_newConfig = Address("c6d9d2cd449a754c494264e1809c50e34d64562b");
 //Address c_nameReg = Address("ddd1cea741d548f90d86fb87a3ae6492e18c03a1");
 
+static QString filterOutTerminal(QString _s)
+{
+	return _s.replace(QRegExp("\x1b\\[(\\d;)?\\d+m"), "");
+}
+
 Main::Main(QWidget *parent) :
 	QMainWindow(parent),
 	ui(new Ui::Main),
@@ -130,7 +137,7 @@ Main::Main(QWidget *parent) :
 	{
 		simpleDebugOut(s, c);
 		m_logLock.lock();
-		m_logHistory.append(QString::fromStdString(s) + "\n");
+		m_logHistory.append(filterOutTerminal(QString::fromStdString(s)) + "\n");
 		m_logChanged = true;
 		m_logLock.unlock();
 //		ui->log->addItem(QString::fromStdString(s));
@@ -164,10 +171,10 @@ Main::Main(QWidget *parent) :
 	statusBar()->addPermanentWidget(ui->chainStatus);
 	statusBar()->addPermanentWidget(ui->blockCount);
 
-	ui->blockCount->setText(QString("PV%2 D%3 %4-%5 v%6").arg(eth::c_protocolVersion).arg(c_databaseVersion).arg(QString::fromStdString(ProofOfWork::name())).arg(ProofOfWork::revision()).arg(dev::Version));
+	ui->blockCount->setText(QString("PV%1.%2 D%3 %4-%5 v%6").arg(eth::c_protocolVersion).arg(eth::c_minorProtocolVersion).arg(c_databaseVersion).arg(QString::fromStdString(ProofOfWork::name())).arg(ProofOfWork::revision()).arg(dev::Version));
 
 	connect(ui->ourAccounts->model(), SIGNAL(rowsMoved(const QModelIndex &, int, int, const QModelIndex &, int)), SLOT(ourAccountsRowsMoved()));
-	
+
 	QSettings s("ethereum", "alethzero");
 	m_networkConfig = s.value("peers").toByteArray();
 	bytesConstRef network((byte*)m_networkConfig.data(), m_networkConfig.size());
@@ -190,7 +197,7 @@ Main::Main(QWidget *parent) :
 	});
 
 	m_dappHost.reset(new DappHost(8081));
-	m_dappLoader = new DappLoader(this, web3());
+	m_dappLoader = new DappLoader(this, web3(), getNameReg());
 	connect(m_dappLoader, &DappLoader::dappReady, this, &Main::dappLoaded);
 	connect(m_dappLoader, &DappLoader::pageReady, this, &Main::pageLoaded);
 //	ui->webView->page()->settings()->setAttribute(QWebEngineSettings::DeveloperExtrasEnabled, true);
@@ -212,6 +219,7 @@ Main::Main(QWidget *parent) :
 
 Main::~Main()
 {
+	m_httpConnector->StopListening();
 	writeSettings();
 	// Must do this here since otherwise m_ethereum'll be deleted (and therefore clearWatches() called by the destructor)
 	// *after* the client is dead.
@@ -321,7 +329,8 @@ void Main::installWatches()
 
 Address Main::getNameReg() const
 {
-	return abiOut<Address>(ethereum()->call(c_newConfig, abiIn("lookup(uint256)", (u256)1)).output);
+	return Address("c6d9d2cd449a754c494264e1809c50e34d64562b");
+//	return abiOut<Address>(ethereum()->call(c_newConfig, abiIn("lookup(uint256)", (u256)1)).output);
 }
 
 Address Main::getCurrencies() const
@@ -507,137 +516,65 @@ QString Main::pretty(dev::Address _a) const
 
 	if (g_newNameReg)
 	{
-		QString s = QString::fromStdString(toString(abiOut<string32>(ethereum()->call(g_newNameReg, abiIn("nameOf(address)", _a)).output)));
+		QString s = QString::fromStdString(toString(abiOut<string32>(ethereum()->call(g_newNameReg, abiIn("getName(address)", _a)).output)));
 		if (s.size())
 			return s;
 	}
-	h256 n;
-	return fromRaw(n);
-}
-
-template <size_t N> inline string toBase36(FixedHash<N> const& _h)
-{
-	static char const* c_alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-	typename FixedHash<N>::Arith a = _h;
-	std::string ret;
-	for (; a > 0; a /= 36)
-		ret = c_alphabet[(unsigned)a % 36] + ret;
-	return ret;
-}
-
-template <size_t N> inline FixedHash<N> fromBase36(string const& _h)
-{
-	typename FixedHash<N>::Arith ret = 0;
-	for (char c: _h)
-		ret = ret * 36 + (c < 'A' ? c - '0' : (c - 'A' + 10));
-	return ret;
-}
-
-static string iban(std::string _c, std::string _d)
-{
-	boost::to_upper(_c);
-	boost::to_upper(_d);
-	auto totStr = _d + _c + "00";
-	bigint tot = 0;
-	for (char x: totStr)
-		if (x >= 'A')
-			tot = tot * 100 + x - 'A' + 10;
-		else
-			tot = tot * 10 + x - '0';
-	unsigned check = (unsigned)(u256)(98 - tot % 97);
-	ostringstream out;
-	out << _c << setfill('0') << setw(2) << check << _d;
-	return out.str();
-}
-
-static std::pair<string, string> fromIban(std::string _iban)
-{
-	if (_iban.size() < 4)
-		return std::make_pair(string(), string());
-	boost::to_upper(_iban);
-	std::string c = _iban.substr(0, 2);
-	std::string d = _iban.substr(4);
-	if (iban(c, d) != _iban)
-		return std::make_pair(string(), string());
-	return make_pair(c, d);
-}
-
-static string directICAP(dev::Address _a)
-{
-	if (!!_a[0])
-		return string();
-	std::string d = toBase36<Address::size>(_a);
-	while (d.size() < 30)
-		d = "0" + d;
-	return iban("XE", d);
-}
-
-static Address fromICAP(std::string const& _s)
-{
-	std::string country;
-	std::string data;
-	std::tie(country, data) = fromIban(_s);
-	if (country.empty())
-		return Address();
-	if (country == "XE" && data.size() == 30)
-		// Direct ICAP
-		return fromBase36<Address::size>(data);
-	// TODO: Indirect ICAP
-	return Address();
+	return QString();
 }
 
 QString Main::render(dev::Address _a) const
 {
 	QString p = pretty(_a);
-	if (!_a[0])
-		p += QString(p.isEmpty() ? "" : " ") + QString::fromStdString(directICAP(_a));
-	if (!p.isEmpty())
-		return p + " (" + QString::fromStdString(_a.abridged()) + ")";
-	return QString::fromStdString(_a.abridged());
+	QString n;
+	try {
+		n = QString::fromStdString(ICAP(_a).encoded());
+	}
+	catch (...) {
+		n = QString::fromStdString(_a.abridged());
+	}
+	return p.isEmpty() ? n : (p + " " + n);
 }
 
-string32 fromString(string const& _s)
-{
-	string32 ret;
-	for (unsigned i = 0; i < 32 && i <= _s.size(); ++i)
-		ret[i] = i < _s.size() ? _s[i] : 0;
-	return ret;
-}
-
-Address Main::fromString(QString const& _n) const
+pair<Address, bytes> Main::fromString(QString const& _n) const
 {
 	if (_n == "(Create Contract)")
-		return Address();
+		return make_pair(Address(), bytes());
 
 	auto g_newNameReg = getNameReg();
 	if (g_newNameReg)
 	{
-		Address a = abiOut<Address>(ethereum()->call(g_newNameReg, abiIn("addressOf(string32)", ::fromString(_n.toStdString()))).output);
+		Address a = abiOut<Address>(ethereum()->call(g_newNameReg, abiIn("addr(bytes32)", ::toString32(_n.toStdString()))).output);
 		if (a)
-			return a;
+			return make_pair(a, bytes());
 	}
 	if (_n.size() == 40)
 	{
 		try
 		{
-			return Address(fromHex(_n.toStdString(), WhenError::Throw));
+			return make_pair(Address(fromHex(_n.toStdString(), WhenError::Throw)), bytes());
 		}
 		catch (BadHexCharacter& _e)
 		{
 			cwarn << "invalid hex character, address rejected";
 			cwarn << boost::diagnostic_information(_e);
-			return Address();
+			return make_pair(Address(), bytes());
 		}
 		catch (...)
 		{
 			cwarn << "address rejected";
-			return Address();
+			return make_pair(Address(), bytes());
 		}
 	}
-	else if (Address a = fromICAP(_n.toStdString()))
-		return a;
 	else
-		return Address();
+		try {
+			return ICAP::decoded(_n.toStdString()).address([&](Address const& a, bytes const& b) -> bytes
+			{
+				return ethereum()->call(a, b).output;
+			}, g_newNameReg);
+		}
+		catch (...) {}
+	return make_pair(Address(), bytes());
 }
 
 QString Main::lookup(QString const& _a) const
@@ -882,6 +819,12 @@ void Main::on_exportKey_triggered()
 		auto k = m_myKeys[ui->ourAccounts->currentRow()];
 		QMessageBox::information(this, "Export Account Key", "Secret key to account " + render(k.address()) + " is:\n" + QString::fromStdString(toHex(k.sec().ref())));
 	}
+}
+
+void Main::on_exportState_triggered()
+{
+	ExportStateDialog dialog(this);
+	dialog.exec();
 }
 
 void Main::on_usePrivate_triggered()
@@ -1154,30 +1097,33 @@ void Main::refreshBlockChain()
 			blockItem->setSelected(true);
 
 		int n = 0;
-		auto b = bc.block(h);
-		for (auto const& i: RLP(b)[1])
-		{
-			Transaction t(i.data(), CheckTransaction::Everything);
-			QString s = t.receiveAddress() ?
-				QString("    %2 %5> %3: %1 [%4]")
-					.arg(formatBalance(t.value()).c_str())
-					.arg(render(t.safeSender()))
-					.arg(render(t.receiveAddress()))
-					.arg((unsigned)t.nonce())
-					.arg(ethereum()->codeAt(t.receiveAddress()).size() ? '*' : '-') :
-				QString("    %2 +> %3: %1 [%4]")
-					.arg(formatBalance(t.value()).c_str())
-					.arg(render(t.safeSender()))
-					.arg(render(right160(sha3(rlpList(t.safeSender(), t.nonce())))))
-					.arg((unsigned)t.nonce());
-			QListWidgetItem* txItem = new QListWidgetItem(s, ui->blocks);
-			auto hba = QByteArray((char const*)h.data(), h.size);
-			txItem->setData(Qt::UserRole, hba);
-			txItem->setData(Qt::UserRole + 1, n);
-			if (oldSelected == hba)
-				txItem->setSelected(true);
-			n++;
+		try {
+			auto b = bc.block(h);
+			for (auto const& i: RLP(b)[1])
+			{
+				Transaction t(i.data(), CheckTransaction::Everything);
+				QString s = t.receiveAddress() ?
+					QString("    %2 %5> %3: %1 [%4]")
+						.arg(formatBalance(t.value()).c_str())
+						.arg(render(t.safeSender()))
+						.arg(render(t.receiveAddress()))
+						.arg((unsigned)t.nonce())
+						.arg(ethereum()->codeAt(t.receiveAddress()).size() ? '*' : '-') :
+					QString("    %2 +> %3: %1 [%4]")
+						.arg(formatBalance(t.value()).c_str())
+						.arg(render(t.safeSender()))
+						.arg(render(right160(sha3(rlpList(t.safeSender(), t.nonce())))))
+						.arg((unsigned)t.nonce());
+				QListWidgetItem* txItem = new QListWidgetItem(s, ui->blocks);
+				auto hba = QByteArray((char const*)h.data(), h.size);
+				txItem->setData(Qt::UserRole, hba);
+				txItem->setData(Qt::UserRole + 1, n);
+				if (oldSelected == hba)
+					txItem->setSelected(true);
+				n++;
+			}
 		}
+		catch (...) {}
 	};
 
 	if (filters.empty())
@@ -1435,7 +1381,7 @@ void Main::on_inject_triggered()
 	try
 	{
 		bytes b = fromHex(s.toStdString(), WhenError::Throw);
-		ethereum()->inject(&b);
+		ethereum()->injectTransaction(b);
 	}
 	catch (BadHexCharacter& _e)
 	{
@@ -1445,6 +1391,25 @@ void Main::on_inject_triggered()
 	catch (...)
 	{
 		cwarn << "transaction rejected";
+	}
+}
+
+void Main::on_injectBlock_triggered()
+{
+	QString s = QInputDialog::getText(this, "Inject Block", "Enter block dump in hex");
+	try
+	{
+		bytes b = fromHex(s.toStdString(), WhenError::Throw);
+		ethereum()->injectBlock(b);
+	}
+	catch (BadHexCharacter& _e)
+	{
+		cwarn << "invalid hex character, transaction rejected";
+		cwarn << boost::diagnostic_information(_e);
+	}
+	catch (...)
+	{
+		cwarn << "block rejected";
 	}
 }
 

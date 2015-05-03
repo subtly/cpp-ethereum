@@ -160,6 +160,8 @@
     <addaction name="killAccount"/>
     <addaction name="separator"/>
     <addaction name="loadJS"/>
+	<addaction name="separator"/>
+	<addaction name="exportState"/>
    </widget>
    <widget class="QMenu" name="menu_Help">
     <property name="title">
@@ -176,6 +178,7 @@
     <addaction name="clearPending"/>
     <addaction name="killBlockchain"/>
     <addaction name="inject"/>
+    <addaction name="injectBlock"/>
     <addaction name="forceMining"/>
     <addaction name="separator"/>
     <addaction name="usePrivate"/>
@@ -1477,6 +1480,11 @@ font-size: 14pt</string>
     <string>&amp;Load Javascript...</string>
    </property>
   </action>
+  <action name="exportState">
+   <property name="text">
+	<string>&amp;Export State...</string>
+   </property>
+  </action>
   <action name="debugStepBack">
    <property name="enabled">
     <bool>false</bool>
@@ -1683,6 +1691,11 @@ font-size: 14pt</string>
   <action name="retryUnknown">
    <property name="text">
     <string>Retry Unknown Parent Blocks</string>
+   </property>
+  </action>
+  <action name="injectBlock">
+   <property name="text">
+    <string>In&amp;ject Block</string>
    </property>
   </action>
  </widget>

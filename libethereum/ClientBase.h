@@ -60,11 +60,11 @@ struct ClientWatch
 	mutable std::chrono::system_clock::time_point lastPoll = std::chrono::system_clock::now();
 };
 
-struct WatchChannel: public LogChannel { static const char* name() { return "(o)"; } static const int verbosity = 7; };
+struct WatchChannel: public LogChannel { static const char* name(); static const int verbosity = 7; };
 #define cwatch LogOutputStream<WatchChannel, true>()
-struct WorkInChannel: public LogChannel { static const char* name() { return ">W>"; } static const int verbosity = 16; };
-struct WorkOutChannel: public LogChannel { static const char* name() { return "<W<"; } static const int verbosity = 16; };
-struct WorkChannel: public LogChannel { static const char* name() { return "-W-"; } static const int verbosity = 21; };
+struct WorkInChannel: public LogChannel { static const char* name(); static const int verbosity = 16; };
+struct WorkOutChannel: public LogChannel { static const char* name(); static const int verbosity = 16; };
+struct WorkChannel: public LogChannel { static const char* name(); static const int verbosity = 21; };
 #define cwork LogOutputStream<WorkChannel, true>()
 #define cworkin LogOutputStream<WorkInChannel, true>()
 #define cworkout LogOutputStream<WorkOutChannel, true>()
@@ -127,7 +127,8 @@ public:
 	virtual Transactions pending() const override;
 	virtual h256s pendingHashes() const override;
 
-	void injectBlock(bytes const& _block);
+	ImportResult injectTransaction(bytes const& _rlp) override { prepareForTransaction(); return m_tq.import(_rlp); }
+	ImportResult injectBlock(bytes const& _block);
 
 	using Interface::diff;
 	virtual StateDiff diff(unsigned _txi, h256 _block) const override;
