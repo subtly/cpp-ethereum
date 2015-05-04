@@ -582,7 +582,6 @@ void Client::onChainChanged(ImportRoute const& _ir)
 			m_preMine = newPreMine;
 		DEV_TIMED(working) ETH_WRITE_GUARDED(x_working)
 			m_working = newPreMine;
-//		Transactions ts = m_postMine.pending();
 		ETH_READ_GUARDED(x_postMine)
 			for (auto const& t: m_postMine.pending())
 			{
@@ -659,11 +658,9 @@ void Client::noteChanged(h256Set const& _filters)
 
 void Client::doWork()
 {
-	// TODO: Use condition variable rather than this rubbish.
-
 	bool t = true;
 	if (m_syncBlockQueue.compare_exchange_strong(t, false))
-		syncBlockQueue();	// GAAA!!!!! CALLED TOO OFTEN!!!
+		syncBlockQueue();
 
 	t = true;
 	if (m_syncTransactionQueue.compare_exchange_strong(t, false) && !m_remoteWorking)
@@ -672,7 +669,10 @@ void Client::doWork()
 	tick();
 
 	if (!m_syncBlockQueue && !m_syncTransactionQueue)
-		this_thread::sleep_for(chrono::milliseconds(20));
+	{
+		std::unique_lock<std::mutex> l(x_signalled);
+		m_signalled.wait_for(l, chrono::seconds(1));
+	}
 }
 
 void Client::tick()
