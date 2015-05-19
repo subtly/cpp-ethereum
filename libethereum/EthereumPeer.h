@@ -53,7 +53,7 @@ class EthereumPeer: public p2p::Capability
 
 public:
 	/// Basic constructor.
-	EthereumPeer(p2p::Session* _s, p2p::HostCapabilityFace* _h, unsigned _i);
+	EthereumPeer(std::shared_ptr<p2p::Session> const& _s, p2p::HostCapabilityFace* _h, unsigned _i);
 
 	/// Basic destructor.
 	virtual ~EthereumPeer();

@@ -190,8 +190,7 @@ void Host::startPeerSession(Public const& _id, RLP const& _rlp, RLPXFrameIO* _io
 			m_peers[_id] = p;
 		}
 	}
-	if (p->isOffline())
-		p->m_lastConnected = std::chrono::system_clock::now();
+	p->m_lastConnected = std::chrono::system_clock::now();
 	p->endpoint.address = _endpoint.address();
 
 	auto protocolVersion = _rlp[0].toInt<unsigned>();
@@ -237,7 +236,7 @@ void Host::startPeerSession(Public const& _id, RLP const& _rlp, RLPXFrameIO* _io
 		for (auto const& i: caps)
 			if (haveCapability(i))
 			{
-				ps->m_capabilities[i] = shared_ptr<Capability>(m_capabilities[i]->newPeerCapability(ps.get(), o));
+				ps->m_capabilities[i] = shared_ptr<Capability>(m_capabilities[i]->newPeerCapability(ps, o));
 				o += m_capabilities[i]->messageCount();
 			}
 		ps->start();

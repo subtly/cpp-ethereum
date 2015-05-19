@@ -34,7 +34,7 @@ class Capability
 	friend class Session;
 
 public:
-	Capability(Session* _s, HostCapabilityFace* _h, unsigned _idOffset);
+	Capability(std::shared_ptr<Session> const& _s, HostCapabilityFace* _h, unsigned _idOffset);
 	virtual ~Capability() {}
 
 	// Implement these in the derived class.
@@ -42,8 +42,8 @@ public:
 	static u256 version() { return 0; }
 	static unsigned messageCount() { return 0; }
 */
-	Session* session() const { return m_session; }
 	HostCapabilityFace* hostCapability() const { return m_host; }
+	std::weak_ptr<Session> const& session() const { return m_peerSession; }
 
 protected:
 	virtual bool interpret(unsigned _id, RLP const&) = 0;
@@ -55,7 +55,7 @@ protected:
 	void addRating(int _r);
 
 private:
-	Session* m_session;
+	std::weak_ptr<Session> m_peerSession;
 	HostCapabilityFace* m_host;
 	bool m_enabled = true;
 	unsigned m_idOffset;

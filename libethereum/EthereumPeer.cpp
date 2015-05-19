@@ -34,7 +34,7 @@ using namespace dev;
 using namespace dev::eth;
 using namespace p2p;
 
-EthereumPeer::EthereumPeer(Session* _s, HostCapabilityFace* _h, unsigned _i):
+EthereumPeer::EthereumPeer(shared_ptr<Session> const& _s, HostCapabilityFace* _h, unsigned _i):
 	Capability(_s, _h, _i),
 	m_sub(host()->m_man)
 {
@@ -217,8 +217,11 @@ void EthereumPeer::setAsking(Asking _a, bool _isSyncing, bool _needHelp)
 
 	m_lastAsk = chrono::system_clock::now();
 
-	session()->addNote("ask", _a == Asking::Nothing ? "nothing" : _a == Asking::State ? "state" : _a == Asking::Hashes ? "hashes" : _a == Asking::Blocks ? "blocks" : "?");
-	session()->addNote("sync", string(isSyncing() ? "ongoing" : "holding") + (needsSyncing() ? " & needed" : ""));
+	if (auto s = session().lock())
+	{
+		s->addNote("ask", _a == Asking::Nothing ? "nothing" : _a == Asking::State ? "state" : _a == Asking::Hashes ? "hashes" : _a == Asking::Blocks ? "blocks" : "?");
+		s->addNote("sync", string(isSyncing() ? "ongoing" : "holding") + (needsSyncing() ? " & needed" : ""));
+	}
 }
 
 void EthereumPeer::setNeedsSyncing(h256 _latestHash, u256 _td)
@@ -229,14 +232,16 @@ void EthereumPeer::setNeedsSyncing(h256 _latestHash, u256 _td)
 	if (m_latestHash)
 		host()->noteNeedsSyncing(this);
 
-	session()->addNote("sync", string(isSyncing() ? "ongoing" : "holding") + (needsSyncing() ? " & needed" : ""));
+	if (auto s = session().lock())
+		s->addNote("sync", string(isSyncing() ? "ongoing" : "holding") + (needsSyncing() ? " & needed" : ""));
 }
 
 void EthereumPeer::tick()
 {
 	if (chrono::system_clock::now() - m_lastAsk > chrono::seconds(10) && m_asking != Asking::Nothing)
 		// timeout
-		session()->disconnect(PingTimeout);
+		if (auto s = session().lock())
+			s->disconnect(PingTimeout);
 }
 
 bool EthereumPeer::isSyncing() const
@@ -312,15 +317,16 @@ bool EthereumPeer::interpret(unsigned _id, RLP const& _r)
 
 		clog(NetMessageSummary) << "Status:" << m_protocolVersion << "/" << m_networkId << "/" << genesisHash << ", TD:" << m_totalDifficulty << "=" << m_latestHash;
 
+		auto s = session().lock();
 		if (genesisHash != host()->m_chain.genesisHash())
 			disable("Invalid genesis hash");
 		else if (m_protocolVersion != host()->protocolVersion())
 			disable("Invalid protocol version.");
 		else if (m_networkId != host()->networkId())
 			disable("Invalid network identifier.");
-		else if (session()->info().clientVersion.find("/v0.7.0/") != string::npos)
+		else if (s->info().clientVersion.find("/v0.7.0/") != string::npos)
 			disable("Blacklisted client version.");
-		else if (host()->isBanned(session()->id()))
+		else if (host()->isBanned(s->id()))
 			disable("Peer banned for previous bad behaviour.");
 		else
 			transition(Asking::Nothing);

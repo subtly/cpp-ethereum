@@ -60,7 +60,7 @@ public:
 	/// Construct Peer from Node.
 	Peer(Node const& _node): Node(_node.id, _node.endpoint, _node.required) {}
 	
-	bool isOffline() const { return !m_session.lock(); }
+//	bool isOffline() const { return !m_session.lock(); }
 
 	virtual bool operator<(Peer const& _p) const;
 	
@@ -93,8 +93,8 @@ protected:
 	unsigned m_failedAttempts = 0;
 	DisconnectReason m_lastDisconnect = NoDisconnect;	///< Reason for disconnect that happened last.
 
-	/// Used by isOffline() and (todo) for peer to emit session information.
-	std::weak_ptr<Session> m_session;
+//	/// Used by isOffline() and (todo) for peer to emit session information.
+//	std::weak_ptr<Session> m_session;
 };
 using Peers = std::vector<Peer>;
 

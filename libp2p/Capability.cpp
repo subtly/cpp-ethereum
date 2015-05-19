@@ -27,7 +27,7 @@ using namespace std;
 using namespace dev;
 using namespace dev::p2p;
 
-Capability::Capability(Session* _s, HostCapabilityFace* _h, unsigned _idOffset): m_session(_s), m_host(_h), m_idOffset(_idOffset)
+Capability::Capability(shared_ptr<Session> const& _s, HostCapabilityFace* _h, unsigned _idOffset): m_peerSession(_s), m_host(_h), m_idOffset(_idOffset)
 {
 	clog(NetConnect) << "New session for capability" << m_host->name() << "; idOffset:" << m_idOffset;
 }
@@ -45,10 +45,12 @@ RLPStream& Capability::prep(RLPStream& _s, unsigned _id, unsigned _args)
 
 void Capability::sealAndSend(RLPStream& _s)
 {
-	m_session->sealAndSend(_s);
+	if (auto s = m_peerSession.lock())
+		s->sealAndSend(_s);
 }
 
 void Capability::addRating(int _r)
 {
-	m_session->addRating(_r);
+	if (auto s = m_peerSession.lock())
+		s->addRating(_r);
 }

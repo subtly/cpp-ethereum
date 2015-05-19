@@ -29,7 +29,7 @@ using namespace dev;
 using namespace dev::p2p;
 using namespace dev::shh;
 
-WhisperPeer::WhisperPeer(Session* _s, HostCapabilityFace* _h, unsigned _i): Capability(_s, _h, _i)
+WhisperPeer::WhisperPeer(shared_ptr<Session> const& _s, HostCapabilityFace* _h, unsigned _i): Capability(_s, _h, _i)
 {
 	RLPStream s;
 	sealAndSend(prep(s, StatusPacket, 1) << version());
@@ -59,8 +59,9 @@ bool WhisperPeer::interpret(unsigned _id, RLP const& _r)
 
 		for (auto const& m: host()->all())
 			m_unseen.insert(make_pair(0, m.first));
-
-		if (session()->id() < host()->host()->id())
+		
+		auto s = session().lock();
+		if (s->id() < host()->host()->id())
 			sendMessages();
 		break;
 	}
