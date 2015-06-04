@@ -30,14 +30,18 @@
 #include <QMessageBox>
 #include <liblll/Compiler.h>
 #include <liblll/CodeFragment.h>
+#if ETH_SOLIDITY || !ETH_TRUE
 #include <libsolidity/CompilerStack.h>
 #include <libsolidity/Scanner.h>
 #include <libsolidity/AST.h>
 #include <libsolidity/SourceReferenceFormatter.h>
+#endif
 #include <libnatspec/NatspecExpressionEvaluator.h>
 #include <libethereum/Client.h>
 #include <libethereum/Utility.h>
-#ifndef _MSC_VER
+#include <libethcore/KeyManager.h>
+
+#if ETH_SERPENT
 #include <libserpent/funcs.h>
 #include <libserpent/util.h>
 #endif
@@ -67,11 +71,25 @@ Transact::~Transact()
 	delete ui;
 }
 
-void Transact::setEnvironment(QList<dev::KeyPair> _myKeys, dev::eth::Client* _eth, NatSpecFace* _natSpecDB)
+void Transact::setEnvironment(AddressHash const& _accounts, dev::eth::Client* _eth, NatSpecFace* _natSpecDB)
 {
-	m_myKeys = _myKeys;
+	m_accounts = _accounts;
 	m_ethereum = _eth;
 	m_natSpecDB = _natSpecDB;
+
+	auto old = ui->from->currentIndex();
+	ui->from->clear();
+	for (auto const& i: m_accounts)
+	{
+		auto d = m_context->keyManager().accountDetails()[i];
+		u256 b = ethereum()->balanceAt(i, PendingBlock);
+		QString s = QString("%4 %2: %1").arg(formatBalance(b).c_str()).arg(QString::fromStdString(m_context->render(i))).arg(QString::fromStdString(d.first));
+		ui->from->addItem(s);
+	}
+	if (old > -1 && old < ui->from->count())
+		ui->from->setCurrentIndex(old);
+	else if (ui->from->count())
+		ui->from->setCurrentIndex(0);
 }
 
 bool Transact::isCreation() const
@@ -108,12 +126,12 @@ void Transact::updateDestination()
 	cwatch << "updateDestination()";
 	QString s;
 	for (auto i: ethereum()->addresses())
-		if ((s = m_context->pretty(i)).size())
+		if ((s = QString::fromStdString(m_context->pretty(i))).size())
 			// A namereg address
 			if (ui->destination->findText(s, Qt::MatchExactly | Qt::MatchCaseSensitive) == -1)
 				ui->destination->addItem(s);
 	for (int i = 0; i < ui->destination->count(); ++i)
-		if (ui->destination->itemText(i) != "(Create Contract)" && !m_context->fromString(ui->destination->itemText(i)))
+		if (ui->destination->itemText(i) != "(Create Contract)" && !m_context->fromString(ui->destination->itemText(i).toStdString()).first)
 			ui->destination->removeItem(i--);
 }
 
@@ -124,8 +142,8 @@ void Transact::updateFee()
 	ui->total->setText(QString("Total: %1").arg(formatBalance(totalReq).c_str()));
 
 	bool ok = false;
-	for (auto i: m_myKeys)
-		if (ethereum()->balanceAt(i.address()) >= totalReq)
+	for (auto const& i: m_accounts)
+		if (ethereum()->balanceAt(i) >= totalReq)
 		{
 			ok = true;
 			break;
@@ -139,10 +157,25 @@ void Transact::updateFee()
 void Transact::on_destination_currentTextChanged(QString)
 {
 	if (ui->destination->currentText().size() && ui->destination->currentText() != "(Create Contract)")
-		if (Address a = m_context->fromString(ui->destination->currentText()))
-			ui->calculatedName->setText(m_context->render(a));
+	{
+		auto p = m_context->fromString(ui->destination->currentText().toStdString());
+		if (p.first)
+			ui->calculatedName->setText(QString::fromStdString(m_context->render(p.first)));
 		else
 			ui->calculatedName->setText("Unknown Address");
+		if (!p.second.empty())
+		{
+			m_data = p.second;
+			ui->data->setPlainText(QString::fromStdString("0x" + toHex(m_data)));
+			ui->data->setEnabled(false);
+		}
+		else if (!ui->data->isEnabled())
+		{
+			m_data.clear();
+			ui->data->setPlainText("");
+			ui->data->setEnabled(true);
+		}
+	}
 	else
 		ui->calculatedName->setText("Create Contract");
 	rejigData();
@@ -168,6 +201,7 @@ static std::string toString(TransactionException _te)
 	}
 }
 
+#if ETH_SOLIDITY
 static string getFunctionHashes(dev::solidity::CompilerStack const& _compiler, string const& _contractName)
 {
 	string ret = "";
@@ -182,6 +216,7 @@ static string getFunctionHashes(dev::solidity::CompilerStack const& _compiler, s
 	}
 	return ret;
 }
+#endif
 
 static tuple<vector<string>, bytes, string> userInputToCode(string const& _user, bool _opt)
 {
@@ -197,6 +232,7 @@ static tuple<vector<string>, bytes, string> userInputToCode(string const& _user,
 		boost::replace_all_copy(u, " ", "");
 		data = fromHex(u);
 	}
+#if ETH_SOLIDITY || !ETH_TRUE
 	else if (sourceIsSolidity(_user))
 	{
 		dev::solidity::CompilerStack compiler(true);
@@ -220,7 +256,8 @@ static tuple<vector<string>, bytes, string> userInputToCode(string const& _user,
 			errors.push_back("Solidity: Uncaught exception");
 		}
 	}
-#ifndef _MSC_VER
+#endif
+#if ETH_SERPENT
 	else if (sourceIsSerpent(_user))
 	{
 		try
@@ -268,8 +305,12 @@ void Transact::rejigData()
 		return;
 
 	// Determine how much balance we have to play with...
-	auto s = findSecret(value() + ethereum()->gasLimitRemaining() * gasPrice());
-	auto b = ethereum()->balanceAt(KeyPair(s).address(), PendingBlock);
+	//findSecret(value() + ethereum()->gasLimitRemaining() * gasPrice());
+	auto s = fromAccount();
+	if (!s)
+		return;
+
+	auto b = ethereum()->balanceAt(s, PendingBlock);
 
 	m_allGood = true;
 	QString htmlInfo;
@@ -312,7 +353,7 @@ void Transact::rejigData()
 	if (b < value() + baseGas * gasPrice())
 	{
 		// Not enough - bail.
-		bail("<div class=\"error\"><span class=\"icon\">ERROR</span> No single account contains enough for paying even the basic amount of gas required.</div>");
+		bail("<div class=\"error\"><span class=\"icon\">ERROR</span> Account doesn't contain enough for paying even the basic amount of gas required.</div>");
 		return;
 	}
 	else
@@ -325,10 +366,11 @@ void Transact::rejigData()
 		er = ethereum()->create(s, value(), m_data, gasNeeded, gasPrice());
 	else
 	{
-		to = m_context->fromString(ui->destination->currentText());
+		// TODO: cache like m_data.
+		to = m_context->fromString(ui->destination->currentText().toStdString()).first;
 		er = ethereum()->call(s, value(), to, m_data, gasNeeded, gasPrice());
 	}
-	gasNeeded = (qint64)(er.gasUsed + er.gasRefunded);
+	gasNeeded = (qint64)(er.gasUsed + er.gasRefunded + c_callStipend);
 	htmlInfo = QString("<div class=\"info\"><span class=\"icon\">INFO</span> Gas required: %1 total = %2 base, %3 exec [%4 refunded later]</div>").arg(gasNeeded).arg(baseGas).arg(gasNeeded - baseGas).arg((qint64)er.gasRefunded) + htmlInfo;
 
 	if (er.excepted != TransactionException::None)
@@ -366,34 +408,53 @@ Secret Transact::findSecret(u256 _totalReq) const
 	if (!ethereum())
 		return Secret();
 
-	Secret best;
+	Address best;
 	u256 bestBalance = 0;
-	for (auto const& i: m_myKeys)
+	for (auto const& i: m_accounts)
 	{
-		auto b = ethereum()->balanceAt(i.address(), PendingBlock);
+		auto b = ethereum()->balanceAt(i, PendingBlock);
 		if (b >= _totalReq)
-			return i.secret();
+		{
+			best = i;
+			break;
+		}
 		if (b > bestBalance)
-			bestBalance = b, best = i.secret();
+			bestBalance = b, best = i;
 	}
-	return best;
+	return m_context->retrieveSecret(best);
+}
+
+Address Transact::fromAccount()
+{
+	if (ui->from->currentIndex() < 0 || ui->from->currentIndex() >= (int)m_accounts.size())
+		return Address();
+	auto it = m_accounts.begin();
+	std::advance(it, ui->from->currentIndex());
+	return *it;
 }
 
 void Transact::on_send_clicked()
 {
-	Secret s = findSecret(value() + fee());
-	auto b = ethereum()->balanceAt(KeyPair(s).address(), PendingBlock);
-	if (!s || b < value() + fee())
+//	Secret s = findSecret(value() + fee());
+	auto a = fromAccount();
+	auto b = ethereum()->balanceAt(a, PendingBlock);
+
+	if (!a || b < value() + fee())
 	{
-		QMessageBox::critical(this, "Transaction Failed", "Couldn't make transaction: no single account contains at least the required amount.");
+		QMessageBox::critical(nullptr, "Transaction Failed", "Couldn't make transaction: account doesn't contain at least the required amount.", QMessageBox::Ok);
 		return;
 	}
+
+	Secret s = m_context->retrieveSecret(a);
+	if (!s)
+		return;
 
 	if (isCreation())
 	{
 		// If execution is a contract creation, add Natspec to
 		// a local Natspec LEVELDB
 		ethereum()->submitTransaction(s, value(), m_data, ui->gas->value(), gasPrice());
+#if ETH_SOLIDITY
 		string src = ui->data->toPlainText().toStdString();
 		if (sourceIsSolidity(src))
 			try
@@ -407,19 +468,22 @@ void Transact::on_send_clicked()
 				}
 			}
 			catch (...) {}
+#endif
 	}
 	else
-		ethereum()->submitTransaction(s, value(), m_context->fromString(ui->destination->currentText()), m_data, ui->gas->value(), gasPrice());
+		// TODO: cache like m_data.
+		ethereum()->submitTransaction(s, value(), m_context->fromString(ui->destination->currentText().toStdString()).first, m_data, ui->gas->value(), gasPrice());
 	close();
 }
 
 void Transact::on_debug_clicked()
 {
-	Secret s = findSecret(value() + fee());
-	auto b = ethereum()->balanceAt(KeyPair(s).address(), PendingBlock);
-	if (!s || b < value() + fee())
+//	Secret s = findSecret(value() + fee());
+	Address from = fromAccount();
+	auto b = ethereum()->balanceAt(from, PendingBlock);
+	if (!from || b < value() + fee())
 	{
-		QMessageBox::critical(this, "Transaction Failed", "Couldn't make transaction: no single account contains at least the required amount.");
+		QMessageBox::critical(this, "Transaction Failed", "Couldn't make transaction: account doesn't contain at least the required amount.");
 		return;
 	}
 
@@ -427,8 +491,9 @@ void Transact::on_debug_clicked()
 	{
 		State st(ethereum()->postState());
 		Transaction t = isCreation() ?
-			Transaction(value(), gasPrice(), ui->gas->value(), m_data, st.transactionsFrom(dev::toAddress(s)), s) :
-			Transaction(value(), gasPrice(), ui->gas->value(), m_context->fromString(ui->destination->currentText()), m_data, st.transactionsFrom(dev::toAddress(s)), s);
+			Transaction(value(), gasPrice(), ui->gas->value(), m_data, st.transactionsFrom(from)) :
+			Transaction(value(), gasPrice(), ui->gas->value(), m_context->fromString(ui->destination->currentText().toStdString()).first, m_data, st.transactionsFrom(from));
+		t.forceSender(from);
 		Debugger dw(m_context, this);
 		Executive e(st, ethereum()->blockChain(), 0);
 		dw.populate(e, t);

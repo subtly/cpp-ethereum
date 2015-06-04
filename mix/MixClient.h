@@ -48,36 +48,33 @@ public:
 	MixClient(std::string const& _dbPath);
 	virtual ~MixClient();
 	/// Reset state to the empty state with given balance.
-	void resetState(std::map<Secret, u256> _accounts);
+	void resetState(std::unordered_map<dev::Address, dev::eth::Account> const& _accounts,  Secret const& _miner = Secret());
 	void mine();
 	ExecutionResult lastExecution() const;
 	ExecutionResult execution(unsigned _index) const;
 
 	void submitTransaction(Secret _secret, u256 _value, Address _dest, bytes const& _data, u256 _gas, u256 _gasPrice) override;
 	Address submitTransaction(Secret _secret, u256 _endowment, bytes const& _init, u256 _gas, u256 _gasPrice) override;
-	dev::eth::ExecutionResult call(Secret _secret, u256 _value, Address _dest, bytes const& _data, u256 _gas, u256 _gasPrice, eth::BlockNumber _blockNumber = eth::PendingBlock, eth::FudgeFactor _ff = eth::FudgeFactor::Strict) override;
-	dev::eth::ExecutionResult create(Secret _secret, u256 _value, bytes const& _data = bytes(), u256 _gas = 10000, u256 _gasPrice = 10 * eth::szabo, eth::BlockNumber _blockNumber = eth::PendingBlock, eth::FudgeFactor _ff = eth::FudgeFactor::Strict) override;
+	dev::eth::ExecutionResult call(Address const& _secret, u256 _value, Address _dest, bytes const& _data, u256 _gas, u256 _gasPrice, eth::BlockNumber _blockNumber = eth::PendingBlock, eth::FudgeFactor _ff = eth::FudgeFactor::Strict) override;
+	dev::eth::ExecutionResult create(Address const& _secret, u256 _value, bytes const& _data = bytes(), u256 _gas = 10000, u256 _gasPrice = 10 * eth::szabo, eth::BlockNumber _blockNumber = eth::PendingBlock, eth::FudgeFactor _ff = eth::FudgeFactor::Strict) override;
 
 	void submitTransaction(Secret _secret, u256 _value, Address _dest, bytes const& _data, u256 _gas, u256 _gasPrice, bool _gasAuto);
 	Address submitTransaction(Secret _secret, u256 _endowment, bytes const& _init, u256 _gas, u256 _gasPrice, bool _gasAuto);
-	dev::eth::ExecutionResult call(Secret _secret, u256 _value, Address _dest, bytes const& _data, u256 _gas, u256 _gasPrice, eth::BlockNumber _blockNumber, bool _gasAuto, eth::FudgeFactor _ff = eth::FudgeFactor::Strict);
+	dev::eth::ExecutionResult call(Address const& _secret, u256 _value, Address _dest, bytes const& _data, u256 _gas, u256 _gasPrice, eth::BlockNumber _blockNumber, bool _gasAuto, eth::FudgeFactor _ff = eth::FudgeFactor::Strict);
 
 	void setAddress(Address _us) override;
-	void setMiningThreads(unsigned _threads) override;
-	unsigned miningThreads() const override;
 	void startMining() override;
 	void stopMining() override;
 	bool isMining() const override;
 	uint64_t hashrate() const override;
-	eth::MineProgress miningProgress() const override;
-	std::pair<h256, u256> getWork() override { return std::pair<h256, u256>(); }
-	bool submitWork(eth::ProofOfWork::Proof const&) override { return false; }
+	eth::MiningProgress miningProgress() const override;
+	eth::ProofOfWork::WorkPackage getWork() override { return eth::ProofOfWork::WorkPackage(); }
+	bool submitWork(eth::ProofOfWork::Solution const&) override { return false; }
 	virtual void flushTransactions() override {}
 
 	/// @returns the last mined block information
 	using Interface::blockInfo; // to remove warning about hiding virtual function
 	eth::BlockInfo blockInfo() const;
-	std::vector<KeyPair> userAccounts() { return m_userAccounts; }
 
 protected:
 	/// ClientBase methods
@@ -90,20 +87,18 @@ protected:
 	virtual void prepareForTransaction() override {}
 
 private:
-	void executeTransaction(dev::eth::Transaction const& _t, eth::State& _state, bool _call, bool _gasAuto, dev::Secret const& _secret);
+	void executeTransaction(dev::eth::Transaction const& _t, eth::State& _state, bool _call, bool _gasAuto, dev::Secret const& _secret = dev::Secret());
 	void noteChanged(h256Set const& _filters);
-	dev::eth::Transaction replaceGas(dev::eth::Transaction const& _t, dev::Secret const& _secret, dev::u256 const& _gas);
+	dev::eth::Transaction replaceGas(dev::eth::Transaction const& _t, dev::u256 const& _gas, dev::Secret const& _secret = dev::Secret());
 
-	std::vector<KeyPair> m_userAccounts;
 	eth::State m_state;
 	eth::State m_startState;
 	OverlayDB m_stateDB;
-	std::auto_ptr<MixBlockChain> m_bc;
+	std::unique_ptr<MixBlockChain> m_bc;
 	mutable boost::shared_mutex x_state;
 	mutable boost::shared_mutex x_executions;
 	ExecutionResults m_executions;
 	std::string m_dbPath;
-	unsigned m_miningThreads;
 };
 
 }

@@ -25,12 +25,11 @@
 #include <libdevcore/CommonIO.h>
 #include <libdevcore/Guards.h>
 #include <libdevcrypto/Common.h>
-#include <libethcore/Params.h>
+#include <libethcore/ProofOfWork.h>
 #include "LogFilter.h"
 #include "Transaction.h"
 #include "AccountDiff.h"
 #include "BlockDetails.h"
-#include "Miner.h"
 
 namespace dev
 {
@@ -73,17 +72,31 @@ public:
 	/// @returns the new contract's address (assuming it all goes through).
 	virtual Address submitTransaction(Secret _secret, u256 _endowment, bytes const& _init, u256 _gas = 10000, u256 _gasPrice = 10 * szabo) = 0;
 
+	/// Submits a new contract-creation transaction.
+	/// @returns the new contract's address (assuming it all goes through).
+	Address submitTransaction(Secret const& _secret, TransactionSkeleton const& _t) { if (_t.creation) return submitTransaction(_secret, _t.value, _t.data, _t.gas, _t.gasPrice); submitTransaction(_secret, _t.value, _t.to, _t.data, _t.gas, _t.gasPrice); return Address(); }
+
 	/// Blocks until all pending transactions have been processed.
 	virtual void flushTransactions() = 0;
 
 	/// Makes the given call. Nothing is recorded into the state.
-	virtual ExecutionResult call(Secret _secret, u256 _value, Address _dest, bytes const& _data, u256 _gas, u256 _gasPrice, BlockNumber _blockNumber, FudgeFactor _ff = FudgeFactor::Strict) = 0;
-	ExecutionResult call(Secret _secret, u256 _value, Address _dest, bytes const& _data = bytes(), u256 _gas = 10000, u256 _gasPrice = 10 * szabo, FudgeFactor _ff = FudgeFactor::Strict) { return call(_secret, _value, _dest, _data, _gas, _gasPrice, m_default, _ff); }
+	virtual ExecutionResult call(Address const& _from, u256 _value, Address _dest, bytes const& _data, u256 _gas, u256 _gasPrice, BlockNumber _blockNumber, FudgeFactor _ff = FudgeFactor::Strict) = 0;
+	ExecutionResult call(Address const& _from, u256 _value, Address _dest, bytes const& _data = bytes(), u256 _gas = 10000, u256 _gasPrice = 10 * szabo, FudgeFactor _ff = FudgeFactor::Strict) { return call(_from, _value, _dest, _data, _gas, _gasPrice, m_default, _ff); }
+	ExecutionResult call(Secret const& _secret, u256 _value, Address _dest, bytes const& _data, u256 _gas, u256 _gasPrice, BlockNumber _blockNumber, FudgeFactor _ff = FudgeFactor::Strict) { return call(toAddress(_secret), _value, _dest, _data, _gas, _gasPrice, _blockNumber, _ff); }
+	ExecutionResult call(Secret const& _secret, u256 _value, Address _dest, bytes const& _data, u256 _gas, u256 _gasPrice, FudgeFactor _ff = FudgeFactor::Strict) { return call(toAddress(_secret), _value, _dest, _data, _gas, _gasPrice, _ff); }
 
 	/// Does the given creation. Nothing is recorded into the state.
 	/// @returns the pair of the Address of the created contract together with its code.
-	virtual ExecutionResult create(Secret _secret, u256 _value, bytes const& _data, u256 _gas, u256 _gasPrice, BlockNumber _blockNumber, FudgeFactor _ff = FudgeFactor::Strict) = 0;
-	ExecutionResult create(Secret _secret, u256 _value, bytes const& _data = bytes(), u256 _gas = 10000, u256 _gasPrice = 10 * szabo, FudgeFactor _ff = FudgeFactor::Strict) { return create(_secret, _value, _data, _gas, _gasPrice, m_default, _ff); }
+	virtual ExecutionResult create(Address const& _from, u256 _value, bytes const& _data, u256 _gas, u256 _gasPrice, BlockNumber _blockNumber, FudgeFactor _ff = FudgeFactor::Strict) = 0;
+	ExecutionResult create(Address const& _from, u256 _value, bytes const& _data = bytes(), u256 _gas = 10000, u256 _gasPrice = 10 * szabo, FudgeFactor _ff = FudgeFactor::Strict) { return create(_from, _value, _data, _gas, _gasPrice, m_default, _ff); }
+	ExecutionResult create(Secret const& _secret, u256 _value, bytes const& _data, u256 _gas, u256 _gasPrice, BlockNumber _blockNumber, FudgeFactor _ff = FudgeFactor::Strict) { return create(toAddress(_secret), _value, _data, _gas, _gasPrice, _blockNumber, _ff); }
+	ExecutionResult create(Secret const& _secret, u256 _value, bytes const& _data, u256 _gas, u256 _gasPrice, FudgeFactor _ff = FudgeFactor::Strict) { return create(toAddress(_secret), _value, _data, _gas, _gasPrice, _ff); }
+
+	/// Injects the RLP-encoded transaction given by the _rlp into the transaction queue directly.
+	virtual ImportResult injectTransaction(bytes const& _rlp) = 0;
+
+	/// Injects the RLP-encoded block given by the _rlp into the block queue directly.
+	virtual ImportResult injectBlock(bytes const& _block) = 0;
 
 	// [STATE-QUERY API]
 
@@ -94,13 +107,15 @@ public:
 	u256 countAt(Address _a) const { return countAt(_a, m_default); }
 	u256 stateAt(Address _a, u256 _l) const { return stateAt(_a, _l, m_default); }
 	bytes codeAt(Address _a) const { return codeAt(_a, m_default); }
-	std::map<u256, u256> storageAt(Address _a) const { return storageAt(_a, m_default); }
+	h256 codeHashAt(Address _a) const { return codeHashAt(_a, m_default); }
+	std::unordered_map<u256, u256> storageAt(Address _a) const { return storageAt(_a, m_default); }
 
 	virtual u256 balanceAt(Address _a, BlockNumber _block) const = 0;
 	virtual u256 countAt(Address _a, BlockNumber _block) const = 0;
 	virtual u256 stateAt(Address _a, u256 _l, BlockNumber _block) const = 0;
 	virtual bytes codeAt(Address _a, BlockNumber _block) const = 0;
-	virtual std::map<u256, u256> storageAt(Address _a, BlockNumber _block) const = 0;
+	virtual h256 codeHashAt(Address _a, BlockNumber _block) const = 0;
+	virtual std::unordered_map<u256, u256> storageAt(Address _a, BlockNumber _block) const = 0;
 
 	// [LOGS API]
 	
@@ -119,7 +134,9 @@ public:
 	// [BLOCK QUERY API]
 
 	virtual Transaction transaction(h256 _transactionHash) const = 0;
+	virtual std::pair<h256, unsigned> transactionLocation(h256 const& _transactionHash) const = 0;
 	virtual h256 hashFromNumber(BlockNumber _number) const = 0;
+	virtual BlockNumber numberFromHash(h256 _blockHash) const = 0;
 
 	virtual BlockInfo blockInfo(h256 _hash) const = 0;
 	virtual BlockDetails blockDetails(h256 _hash) const = 0;
@@ -171,11 +188,6 @@ public:
 	/// Get the coinbase address.
 	virtual Address address() const = 0;
 
-	/// Stops mining and sets the number of mining threads (0 for automatic).
-	virtual void setMiningThreads(unsigned _threads = 0) = 0;
-	/// Get the effective number of mining threads.
-	virtual unsigned miningThreads() const = 0;
-
 	/// Start mining.
 	/// NOT thread-safe - call it & stopMining only from a single thread
 	virtual void startMining() = 0;
@@ -188,12 +200,12 @@ public:
 	virtual uint64_t hashrate() const = 0;
 
 	/// Get hash of the current block to be mined minus the nonce (the 'work hash').
-	virtual std::pair<h256, u256> getWork() = 0;
+	virtual ProofOfWork::WorkPackage getWork() = 0;
 	/// Submit the nonce for the proof-of-work.
-	virtual bool submitWork(ProofOfWork::Proof const& _proof) = 0;
+	virtual bool submitWork(ProofOfWork::Solution const& _proof) = 0;
 
 	/// Check the progress of the mining.
-	virtual MineProgress miningProgress() const = 0;
+	virtual MiningProgress miningProgress() const = 0;
 
 protected:
 	int m_default = PendingBlock;

@@ -51,7 +51,10 @@ struct NoUPnPDevice: virtual Exception {};
 struct RootNotFound: virtual Exception {};
 struct BadRoot: virtual Exception {};
 struct FileError: virtual Exception {};
+struct Overflow: virtual Exception {};
 struct InterfaceNotSupported: virtual Exception { public: InterfaceNotSupported(std::string _f): Exception("Interface " + _f + " not supported.") {} };
+struct FailedInvariant: virtual Exception {};
+struct ExternalFunctionFailure: virtual Exception { public: ExternalFunctionFailure(std::string _f): Exception("Function " + _f + "() failed.") {} };
 
 // error information to be added to exceptions
 using errinfo_invalidSymbol = boost::error_info<struct tag_invalidSymbol, char>;

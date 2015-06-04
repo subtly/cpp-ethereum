@@ -65,10 +65,12 @@ public:
 	bool isConnected() const { return m_socket.is_open(); }
 
 	NodeId id() const;
-	unsigned socketId() const { return m_info.socket; }
+	unsigned socketId() const { return m_info.socketId; }
 
 	template <class PeerCap>
 	std::shared_ptr<PeerCap> cap() const { try { return std::static_pointer_cast<PeerCap>(m_capabilities.at(std::make_pair(PeerCap::name(), PeerCap::version()))); } catch (...) { return nullptr; } }
+	template <class PeerCap>
+	std::shared_ptr<PeerCap> cap(u256 const& _version) const { try { return std::static_pointer_cast<PeerCap>(m_capabilities.at(std::make_pair(PeerCap::name(), _version))); } catch (...) { return nullptr; } }
 
 	static RLPStream& prep(RLPStream& _s, PacketType _t, unsigned _args = 0);
 	void sealAndSend(RLPStream& _s);

@@ -4,7 +4,11 @@
 # by defining this variable, cmake will look for dependencies first in our own repository before looking in system paths like /usr/local/ ...
 # this must be set to point to the same directory as $ETH_DEPENDENCY_INSTALL_DIR in /extdep directory
 string(TOLOWER ${CMAKE_SYSTEM_NAME} _system_name)
-set (ETH_DEPENDENCY_INSTALL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extdep/install/${_system_name}")
+if (CMAKE_CL_64)
+	set (ETH_DEPENDENCY_INSTALL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extdep/install/${_system_name}/x64")
+else ()
+	set (ETH_DEPENDENCY_INSTALL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extdep/install/${_system_name}/Win32")
+endif()
 set (CMAKE_PREFIX_PATH ${ETH_DEPENDENCY_INSTALL_DIR})
 
 # setup directory for cmake generated files and include it globally 
@@ -19,15 +23,17 @@ set(ETH_SCRIPTS_DIR ${CMAKE_SOURCE_DIR}/cmake/scripts)
 # TODO use proper version of windows SDK (32 vs 64)
 # TODO make it possible to use older versions of windows SDK (7.0+ should also work)
 # TODO it windows SDK is NOT FOUND, throw ERROR
+# from https://github.com/rpavlik/cmake-modules/blob/master/FindWindowsSDK.cmake
 if (WIN32)
-	set (CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "C:/Program Files/Windows Kits/8.1/Lib/winv6.3/um/x86")
-	message(" - Found windows 8.1 SDK")
-	#set (CMAKE_PREFIX_PATH "C:/Program Files/Windows Kits/8.1/Lib/winv6.3/um/x64")
+	find_package(WINDOWSSDK REQUIRED)
+	message(" - WindowsSDK dirs: ${WINDOWSSDK_DIRS}")
+	set (CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} ${WINDOWSSDK_DIRS})
 endif()
 
 # homebrew installs qts in opt
 if (APPLE)
-	set (CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/usr/local/opt/qt5")
+	set (CMAKE_PREFIX_PATH "/usr/local/opt/qt5" ${CMAKE_PREFIX_PATH})
+	set (CMAKE_PREFIX_PATH "/usr/local/opt/v8-315" ${CMAKE_PREFIX_PATH})
 endif()
 
 find_program(CTEST_COMMAND ctest)
@@ -42,6 +48,13 @@ message(" - CryptoPP lib   : ${CRYPTOPP_LIBRARIES}")
 find_package (LevelDB REQUIRED)
 message(" - LevelDB header: ${LEVELDB_INCLUDE_DIRS}")
 message(" - LevelDB lib: ${LEVELDB_LIBRARIES}")
+
+if (JSCONSOLE)
+	find_package (v8 REQUIRED)
+	message(" - v8 header: ${V8_INCLUDE_DIRS}")
+	message(" - v8 lib   : ${V8_LIBRARIES}")
+	add_definitions(-DETH_JSCONSOLE)
+endif()
 
 # TODO the Jsoncpp package does not yet check for correct version number
 find_package (Jsoncpp 0.60 REQUIRED)
@@ -59,7 +72,7 @@ if (JSONRPC)
  	find_package(MHD) 
 	message(" - microhttpd header: ${MHD_INCLUDE_DIRS}")
 	message(" - microhttpd lib   : ${MHD_LIBRARIES}")
-
+	message(" - microhttpd dll   : ${MHD_DLLS}")
 endif() #JSONRPC
 
 # TODO readline package does not yet check for correct version number
@@ -86,7 +99,7 @@ endif()
 # TODO it is also not required in msvc build
 find_package (Gmp 6.0.0)
 if (GMP_FOUND)
-	message(" - gmp Header: ${GMP_INCLUDE_DIRS}")
+	message(" - gmp header: ${GMP_INCLUDE_DIRS}")
 	message(" - gmp lib   : ${GMP_LIBRARIES}")
 endif()
 
@@ -95,6 +108,19 @@ endif()
 find_package (CURL)
 message(" - curl header: ${CURL_INCLUDE_DIRS}")
 message(" - curl lib   : ${CURL_LIBRARIES}")
+
+# cpuid required for eth
+find_package (Cpuid)
+if (CPUID_FOUND)
+	message(" - cpuid header: ${CPUID_INCLUDE_DIRS}")
+	message(" - cpuid lib   : ${CPUID_LIBRARIES}")
+endif()
+
+find_package (OpenCL)
+if (OpenCL_FOUND)
+	message(" - opencl header: ${OpenCL_INCLUDE_DIRS}")
+	message(" - opencl lib   : ${OpenCL_LIBRARIES}")
+endif()
 
 # find location of jsonrpcstub
 find_program(ETH_JSON_RPC_STUB jsonrpcstub)
@@ -132,6 +158,11 @@ if (GUI)
 	if (WIN32)
 		set (WINDEPLOYQT_APP ${Qt5Core_DIR}/../../../bin/windeployqt)
 		message(" - windeployqt path: ${WINDEPLOYQT_APP}")
+	endif()
+
+	if (APPLE)
+		find_program(ETH_APP_DMG appdmg)
+		message(" - appdmg location : ${ETH_APP_DMG}")
 	endif()
 
 	if (USENPM)

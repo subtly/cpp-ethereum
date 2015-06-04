@@ -28,6 +28,8 @@
 
 #include <deque>
 #include <chrono>
+#include <unordered_map>
+#include <unordered_set>
 #include <libdevcore/Log.h>
 #include <libdevcore/Exceptions.h>
 #include <libdevcore/Guards.h>
@@ -39,6 +41,14 @@
 #include "Transaction.h"
 #include "BlockQueue.h"
 namespace ldb = leveldb;
+
+namespace std
+{
+template <> struct hash<pair<dev::h256, unsigned>>
+{
+	size_t operator()(pair<dev::h256, unsigned> const& _x) const { return hash<dev::h256>()(_x.first) ^ hash<unsigned>()(_x.second); }
+};
+}
 
 namespace dev
 {
@@ -56,18 +66,20 @@ struct AlreadyHaveBlock: virtual Exception {};
 struct UnknownParent: virtual Exception {};
 struct FutureTime: virtual Exception {};
 
-struct BlockChainChat: public LogChannel { static const char* name() { return "-B-"; } static const int verbosity = 7; };
-struct BlockChainNote: public LogChannel { static const char* name() { return "=B="; } static const int verbosity = 4; };
-struct BlockChainWarn: public LogChannel { static const char* name() { return "=B="; } static const int verbosity = 1; };
+struct BlockChainChat: public LogChannel { static const char* name(); static const int verbosity = 5; };
+struct BlockChainNote: public LogChannel { static const char* name(); static const int verbosity = 3; };
+struct BlockChainWarn: public LogChannel { static const char* name(); static const int verbosity = 1; };
+struct BlockChainDebug: public LogChannel { static const char* name(); static const int verbosity = 0; };
 
 // TODO: Move all this Genesis stuff into Genesis.h/.cpp
-std::map<Address, Account> const& genesisState();
+std::unordered_map<Address, Account> const& genesisState();
 
 ldb::Slice toSlice(h256 const& _h, unsigned _sub = 0);
 
-using BlocksHash = std::map<h256, bytes>;
+using BlocksHash = std::unordered_map<h256, bytes>;
 using TransactionHashes = h256s;
 using UncleHashes = h256s;
+using ImportRoute = std::pair<h256s, h256s>;
 
 enum {
 	ExtraDetails = 0,
@@ -79,12 +91,6 @@ enum {
 };
 
 using ProgressCallback = std::function<void(unsigned, unsigned)>;
-
-enum class Aversion
-{
-	AvoidOldBlocks,
-	ImportOldBlocks
-};
 
 /**
  * @brief Implements the blockchain database. All data this gives is disk-backed.
@@ -103,16 +109,18 @@ public:
 	/// To be called from main loop every 100ms or so.
 	void process();
 
-	/// Sync the chain with any incoming blocks. All blocks should, if processed in order
+	/// Sync the chain with any incoming blocks. All blocks should, if processed in order.
+	/// @returns fresh blocks, dead blocks and true iff there are additional blocks to be processed waiting.
 	std::tuple<h256s, h256s, bool> sync(BlockQueue& _bq, OverlayDB const& _stateDB, unsigned _max);
 
 	/// Attempt to import the given block directly into the CanonBlockChain and sync with the state DB.
 	/// @returns the block hashes of any blocks that came into/went out of the canonical block chain.
-	std::pair<h256s, h256> attemptImport(bytes const& _block, OverlayDB const& _stateDB, Aversion _force = Aversion::AvoidOldBlocks) noexcept;
+	std::pair<ImportResult, ImportRoute> attemptImport(bytes const& _block, OverlayDB const& _stateDB, ImportRequirements::value _ir = ImportRequirements::Default) noexcept;
 
 	/// Import block into disk-backed DB
 	/// @returns the block hashes of any blocks that came into/went out of the canonical block chain.
-	std::pair<h256s, h256> import(bytes const& _block, OverlayDB const& _stateDB, Aversion _force = Aversion::AvoidOldBlocks);
+	ImportRoute import(bytes const& _block, OverlayDB const& _stateDB, ImportRequirements::value _ir = ImportRequirements::Default);
+	ImportRoute import(BlockInfo const& _bi, bytes const& _block, OverlayDB const& _stateDB, ImportRequirements::value _ir = ImportRequirements::Default);
 
 	/// Returns true if the given block is known (though not necessarily a part of the canon chain).
 	bool isKnown(h256 const& _hash) const;
@@ -147,7 +155,7 @@ public:
 	UncleHashes uncleHashes() const { return uncleHashes(currentHash()); }
 	
 	/// Get the hash for a given block's number.
-	h256 numberHash(unsigned _i) const { if (!_i) return genesisHash(); return queryExtras<BlockHash, ExtraBlockHash>(h256(u256(_i)), m_blockHashes, x_blockHashes, NullBlockHash).value; }
+	h256 numberHash(unsigned _i) const { if (!_i) return genesisHash(); return queryExtras<BlockHash, ExtraBlockHash>(h256(_i), m_blockHashes, x_blockHashes, NullBlockHash).value; }
 
 	/// Get the last N hashes for a given block. (N is determined by the LastHashes type.)
 	LastHashes lastHashes() const { return lastHashes(number()); }
@@ -188,7 +196,7 @@ public:
 
 	/// Get a number for the given hash (or the most recent mined if none given). Thread-safe.
 	unsigned number(h256 const& _hash) const { return details(_hash).number; }
-	unsigned number() const { return number(currentHash()); }
+	unsigned number() const { return m_lastBlockNumber; }
 
 	/// Get a given block (RLP format). Thread-safe.
 	h256 currentHash() const { ReadGuard l(x_lastBlockHash); return m_lastBlockHash; }
@@ -196,14 +204,14 @@ public:
 	/// Get the hash of the genesis block. Thread-safe.
 	h256 genesisHash() const { return m_genesisHash; }
 
-	/// Get all blocks not allowed as uncles given a parent (i.e. featured as uncles/main in parent, parent + 1, ... parent + 5).
-	/// @returns set including the header-hash of every parent (including @a _parent) up to and including generation +5
+	/// Get all blocks not allowed as uncles given a parent (i.e. featured as uncles/main in parent, parent + 1, ... parent + @a _generations).
+	/// @returns set including the header-hash of every parent (including @a _parent) up to and including generation + @a _generations
 	/// togther with all their quoted uncles.
-	h256Set allUnclesFrom(h256 const& _parent) const;
+	h256Hash allKinFrom(h256 const& _parent, unsigned _generations) const;
 
 	/// Run through database and verify all blocks by reevaluating.
 	/// Will call _progress with the progress in this operation first param done, second total.
-	void rebuild(std::string const& _path, ProgressCallback const& _progress = std::function<void(unsigned, unsigned)>());
+	void rebuild(std::string const& _path, ProgressCallback const& _progress = std::function<void(unsigned, unsigned)>(), bool _prepPoW = false);
 
 	/** @returns a tuple of:
 	 * - an vector of hashes of all blocks between @a _from and @a _to, all blocks are ordered first by a number of
@@ -254,7 +262,7 @@ private:
 	void open(std::string const& _path, WithExisting _we = WithExisting::Trust);
 	void close();
 
-	template<class T, unsigned N> T queryExtras(h256 const& _h, std::map<h256, T>& _m, boost::shared_mutex& _x, T const& _n, ldb::DB* _extrasDB = nullptr) const
+	template<class T, unsigned N> T queryExtras(h256 const& _h, std::unordered_map<h256, T>& _m, boost::shared_mutex& _x, T const& _n, ldb::DB* _extrasDB = nullptr) const
 	{
 		{
 			ReadGuard l(_x);
@@ -298,8 +306,8 @@ private:
 
 	using CacheID = std::pair<h256, unsigned>;
 	mutable Mutex x_cacheUsage;
-	mutable std::deque<std::set<CacheID>> m_cacheUsage;
-	mutable std::set<CacheID> m_inUse;
+	mutable std::deque<std::unordered_set<CacheID>> m_cacheUsage;
+	mutable std::unordered_set<CacheID> m_inUse;
 	void noteUsed(h256 const& _h, unsigned _extra = (unsigned)-1) const;
 	std::chrono::system_clock::time_point m_lastCollection;
 
@@ -318,6 +326,7 @@ private:
 	/// Hash of the last (valid) block on the longest chain.
 	mutable boost::shared_mutex x_lastBlockHash;
 	h256 m_lastBlockHash;
+	unsigned m_lastBlockNumber = 0;
 
 	/// Genesis block info.
 	h256 m_genesisHash;

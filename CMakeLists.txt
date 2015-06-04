@@ -1,37 +1,48 @@
 # cmake global
 cmake_minimum_required(VERSION 2.8.12)
+
+project(ethereum)
+
+set(CMAKE_AUTOMOC ON)
+
+# link_directories interprate relative paths with respect to CMAKE_CURRENT_SOURCE_DIR
+cmake_policy(SET CMP0015 NEW)
+
 # let cmake autolink dependencies on windows
 # it's specified globally, cause qt libraries requires that on windows and they are also found globally
 cmake_policy(SET CMP0020 NEW)
 
-project(ethereum)
+# 3.1 and above
+if ((${CMAKE_MAJOR_VERSION} GREATER 2) AND (${CMAKE_MINOR_VERSION} GREATER 0))
+	# implicitly dereference variables (deprecated in 3.1)
+	cmake_policy(SET CMP0054 NEW)
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-
 
 ######################################################################################################
 
 # user defined, defaults
 # Normally, set(...CACHE...) creates cache variables, but does not modify them.
-function(createDefaultCacheConfig)
-	set(VMTRACE OFF CACHE BOOL "VM tracing and run-time checks (useful for cross-implementation VM debugging)")
-	set(PARANOID OFF CACHE BOOL "Additional run-time checks")
-	set(JSONRPC ON CACHE BOOL "Build with jsonprc. default on")
-	set(FATDB OFF CACHE BOOL "Build with ability to list entries in the Trie. Doubles DB size, slows everything down, but good for looking at state diffs and trie contents.")
-	set(USENPM OFF CACHE BOOL "Use npm to recompile ethereum.js if it was changed")
-	set(PROFILING OFF CACHE BOOL "Build in support for profiling")
+option(VMTRACE "VM tracing and run-time checks (useful for cross-implementation VM debugging)" OFF)
+option(PARANOID "Additional run-time checks" OFF)
+option(JSONRPC "Build with jsonprc. default on" ON)
+option(FATDB "Build with ability to list entries in the Trie. Doubles DB size, slows everything down, but good for looking at state diffs and trie contents." OFF)
+option(USENPM "Use npm to recompile ethereum.js if it was changed" OFF)
+option(PROFILING "Build in support for profiling" OFF)
 
-	set(BUNDLE "none" CACHE STRING "Predefined bundle of software to build (none, full, user, tests, minimal).")
-	set(SOLIDITY ON CACHE BOOL "Build the Solidity language components")
-	set(SERPENT ON CACHE BOOL "Build the Serpent language components")
-	set(TOOLS ON CACHE BOOL "Build the tools components")
-	set(NCURSES ON CACHE BOOL "Build the NCurses components")
-	set(GUI ON CACHE BOOL "Build GUI components (AlethZero, Mix)")
-	set(TESTS ON CACHE BOOL "Build the tests.")
-	set(EVMJIT OFF CACHE BOOL "Build just-in-time compiler for EVM code (requires LLVM)")
-	set(ETHASHCL OFF CACHE BOOL "Build in support for GPU mining via OpenCL")
-endfunction()
-
+set(BUNDLE "none" CACHE STRING "Predefined bundle of software to build (none, full, user, tests, minimal).")
+option(MINER "Build the CLI miner component" ON)
+option(ETHKEY "Build the CLI key manager component" ON)
+option(SOLIDITY "Build the Solidity language components" ON)
+option(SERPENT "Build the Serpent language components" ON)
+option(TOOLS "Build the tools components" ON)
+option(NCURSES "Build the NCurses components" ON)
+option(GUI "Build GUI components (AlethZero, Mix)" ON)
+option(TESTS "Build the tests." ON)
+option(EVMJIT "Build just-in-time compiler for EVM code (requires LLVM)" OFF)
+option(ETHASHCL "Build in support for GPU mining via OpenCL" OFF)
+option(JSCONSOLE "Build in javascript console" OFF)
 
 # propagates CMake configuration options to the compiler
 function(configureProject)
@@ -61,6 +72,14 @@ function(configureProject)
 
 	if (GUI)
 		add_definitions(-DETH_GUI)
+	endif()
+
+	if (CPUID_FOUND)
+		add_definitions(-DETH_CPUID)
+	endif()
+
+	if (CURL_FOUND)
+		add_definitions(-DETH_CURL)
 	endif()
 
 	add_definitions(-DETH_TRUE)
@@ -120,9 +139,6 @@ endfunction()
 ######################################################################################################
 
 
-set(CMAKE_AUTOMOC ON)
-cmake_policy(SET CMP0015 NEW)
-
 # Clear invalid option
 if ("${CMAKE_BUILD_TYPE}" STREQUAL "Release")
 	if (PARANOID)
@@ -135,96 +151,63 @@ if ("${CMAKE_BUILD_TYPE}" STREQUAL "Release")
 	endif ()
 endif ()
 
-createDefaultCacheConfig()
-
 # Force chromium.
 set (ETH_HAVE_WEBENGINE 1)
 
-# Normalise build options
+# Backwards compatibility
+if (HEADLESS)
+	message("*** WARNING: -DHEADLESS=1 option is DEPRECATED! Use -DBUNDLE=minimal or -DGUI=0")
+	set(GUI OFF)
+endif ()
+
 # TODO: Abstract into something sensible and move into a function.
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
 	set(DECENT_PLATFORM OFF)
 else ()
 	set(DECENT_PLATFORM ON)
 endif ()
-# Backwards compatibility
-if (HEADLESS)
-	set(BUNDLE "minimal")
-endif ()
 
-if (PARANOID)
-	set(PARANOID ON)
-else ()
-	set(PARANOID OFF)
-endif ()
-if (VMTRACE)
-	set(VMTRACE ON)
-else ()
-	set(VMTRACE OFF)
-endif ()
-if (EVMJIT)
-	set(EVMJIT ON)
-else ()
-	set(EVMJIT OFF)
-endif()
-if (FATDB)
-	set(FATDB ON)
-else ()
-	set(FATDB OFF)
-endif()
-if (JSONRPC)
+macro(eth_format_option O)
+	if (${${O}})
+		set(${O} ON)	
+	else()
+		set(${O} OFF)	
+	endif()
+endmacro()
+
+macro(eth_format_option_on_decent_platform O)
+	if (${${O}})
+		set(${O} ${DECENT_PLATFORM})
+	else()
+		set(${O} OFF)
+	endif()
+endmacro()
+
+# Normalise build options
+eth_format_option(PARANOID)
+eth_format_option(VMTRACE)
+eth_format_option(EVMJIT)
+eth_format_option(FATDB)
+eth_format_option(JSONRPC)
+eth_format_option(MINER)
+eth_format_option(USENPM)
+eth_format_option(PROFILING)
+eth_format_option(SOLIDITY)
+eth_format_option(GUI)
+eth_format_option(TESTS)
+eth_format_option(TOOLS)
+eth_format_option(ETHASHCL)
+eth_format_option(JSCONSOLE)
+eth_format_option_on_decent_platform(SERPENT)
+eth_format_option_on_decent_platform(NCURSES)
+
+if (JSCONSOLE)
 	set(JSONRPC ON)
-else ()
-	set(JSONRPC OFF)
-endif ()
-if (USENPM)
-	set(USENPM ON)
-else ()
-	set(USENPM OFF)
-endif ()
-if (PROFILING)
-	set(PROFILING ON)
-else ()
-	set(PROFILING OFF)
-endif ()
-
-
-if (SOLIDITY)
-	set(SOLIDITY ON)
-else ()
-	set(SOLIDITY OFF)
 endif()
-if (SERPENT)
-	set(SERPENT ${DECENT_PLATFORM})
-else ()
-	set(SERPENT OFF)
-endif()
+
 if (GUI)
-	set(GUI ON)
 	set(JSONRPC ON)
-else ()
-	set(GUI OFF)
-endif ()
-if (TESTS)
-	set(TESTS ON)
-else ()
-	set(TESTS OFF)
-endif ()
-if (TOOLS)
-	set(TOOLS ON)
-else ()
-	set(TOOLS OFF)
-endif ()
-if (ETHASHCL)
-	set(ETHASHCL ON)
-else ()
-	set(ETHASHCL OFF)
 endif()
-if (NCURSES)
-	set(NCURSES ${DECENT_PLATFORM})
-else ()
-	set(NCURSES OFF)
-endif ()
 
 if (BUNDLE STREQUAL "minimal")
 	set(SERPENT OFF)
@@ -243,6 +226,15 @@ elseif (BUNDLE STREQUAL "full")
 	set(TOOLS ON)
 	set(TESTS ON)
 	set(FATDB ON)
+elseif (BUNDLE STREQUAL "core")
+	set(SERPENT OFF)
+	set(SOLIDITY ON)
+	set(USENPM OFF)
+	set(GUI ON)
+	set(NCURSES OFF)
+	set(TOOLS ON)
+	set(TESTS OFF)
+	set(FATDB ON)
 elseif (BUNDLE STREQUAL "tests")
 	set(SERPENT ${DECENT_PLATFORM})
 	set(SOLIDITY ON)
@@ -260,9 +252,29 @@ elseif (BUNDLE STREQUAL "user")
 	set(NCURSES ${DECENT_PLATFORM})
 	set(TOOLS ON)
 	set(TESTS OFF)
+elseif (BUNDLE STREQUAL "wallet")
+	set(SERPENT OFF)
+	set(SOLIDITY OFF)
+	set(USENPM OFF)
+	set(GUI OFF)
+	set(NCURSES OFF)
+	set(TOOLS OFF)
+	set(TESTS OFF)
+	set(ETHKEY ON)
+	set(MINER OFF)
+	set(ETHASHCL ON)
+elseif (BUNDLE STREQUAL "miner")
+	set(SERPENT OFF)
+	set(SOLIDITY OFF)
+	set(USENPM OFF)
+	set(GUI OFF)
+	set(NCURSES OFF)
+	set(TOOLS OFF)
+	set(TESTS OFF)
+	set(ETHKEY OFF)
+	set(MINER ON)
+	set(ETHASHCL ON)
 endif ()
-
-configureProject()
 
 # Default CMAKE_BUILD_TYPE to "Release".
 set(CMAKE_BUILD_TYPE CACHE STRING "Release")
@@ -270,15 +282,16 @@ if ("x${CMAKE_BUILD_TYPE}" STREQUAL "x")
 	set(CMAKE_BUILD_TYPE "Release")
 endif ()
 
-# Default TARGET_PLATFORM to "linux".
-set(TARGET_PLATFORM CACHE STRING "linux")
+# Default TARGET_PLATFORM to ${CMAKE_SYSTEM_NAME}
+# change this once we support cross compiling
+set(TARGET_PLATFORM CACHE STRING ${CMAKE_SYSTEM_NAME})
 if ("x${TARGET_PLATFORM}" STREQUAL "x")
-	if (WIN32)
-		set(TARGET_PLATFORM "windows")
-	else ()
-		set(TARGET_PLATFORM "linux")
-	endif ()
+	set(TARGET_PLATFORM ${CMAKE_SYSTEM_NAME})
 endif ()
+
+include(EthDependencies)
+
+configureProject()
 
 message("------------------------------------------------------------------------")
 message("--                  CMake Version                            ${CMAKE_VERSION}")
@@ -287,12 +300,16 @@ message("-- TARGET_PLATFORM  Target platform                          ${TARGET_P
 message("-- BUNDLE           Build bundle                             ${BUNDLE}")
 message("--------------------------------------------------------------- features")
 message("--                  Chromium support                         ${ETH_HAVE_WEBENGINE}")
+message("--                  Hardware identification support          ${CPUID_FOUND}")
+message("--                  HTTP Request support                     ${CURL_FOUND}")
 message("-- VMTRACE          VM execution tracing                     ${VMTRACE}")
 message("-- PROFILING        Profiling support                        ${PROFILING}")
 message("-- FATDB            Full database exploring                  ${FATDB}")
 message("-- JSONRPC          JSON-RPC support                         ${JSONRPC}")
 message("-- USENPM           Javascript source building               ${USENPM}")
 message("------------------------------------------------------------- components")
+message("-- MINER            Build miner                              ${MINER}")
+message("-- ETHKEY           Build wallet tools                       ${ETHKEY}")
 message("-- TOOLS            Build basic tools                        ${TOOLS}")
 message("-- SOLIDITY         Build Solidity language components       ${SOLIDITY}")
 message("-- SERPENT          Build Serpent language components        ${SERPENT}")
@@ -300,21 +317,17 @@ message("-- GUI              Build GUI components                     ${GUI}")
 message("-- NCURSES          Build NCurses components                 ${NCURSES}")
 message("-- TESTS            Build tests                              ${TESTS}")
 message("-- ETHASHCL         Build OpenCL components (experimental!)  ${ETHASHCL}")
+message("-- JSCONSOLE        Build with javascript console            ${JSCONSOLE}")
 message("-- EVMJIT           Build LLVM-based JIT EVM (experimental!) ${EVMJIT}")
 message("------------------------------------------------------------------------")
 message("")
 
-
-if ("${TARGET_PLATFORM}" STREQUAL "linux")
-	set(CMAKE_THREAD_LIBS_INIT pthread)
-endif ()
+set(CMAKE_THREAD_LIBS_INIT pthread)
 
 include(EthCompilerSettings)
 message("-- CXXFLAGS: ${CMAKE_CXX_FLAGS}")
 
-
 # this must be an include, as a function it would mess up with variable scope!
-include(EthDependencies)
 include(EthExecutableHelper)
 
 createBuildInfo()
@@ -324,9 +337,20 @@ if (EVMJIT)
 	add_subdirectory(evmjit)
 endif()
 
+if (TOOLS OR GUI OR SOLIDITY OR NCURSES OR TESTS)
+	set(GENERAL 1)
+else ()
+	set(GENERAL 0)
+endif ()
+
+message("GENERAL ${GENERAL}")
+
 add_subdirectory(libdevcore)
-add_subdirectory(libevmcore)
-add_subdirectory(liblll)
+if (GENERAL)
+	add_subdirectory(libevmcore)
+	add_subdirectory(libevmasm)
+	add_subdirectory(liblll)
+endif ()
 
 if (SERPENT)
 	add_subdirectory(libserpent)
@@ -342,26 +366,48 @@ if (TOOLS)
 	if (SOLIDITY)
 		add_subdirectory(solc)
 	endif ()
-endif()
+endif ()
 
-if (JSONRPC)
+if (JSONRPC AND GENERAL)
 	add_subdirectory(libweb3jsonrpc)
-endif()
+endif ()
+
+if (JSCONSOLE)
+	add_subdirectory(libjsengine)
+	add_subdirectory(libjsconsole)
+endif ()
 
 add_subdirectory(secp256k1)
-add_subdirectory(libp2p)
+add_subdirectory(libscrypt)
 add_subdirectory(libdevcrypto)
-add_subdirectory(libwhisper)
 
-add_subdirectory(libethash)
-if (ETHASHCL)
-	add_subdirectory(libethash-cl)
+if (GENERAL)
+	add_subdirectory(libp2p)
+	add_subdirectory(libwhisper)
+endif ()
+
+if (GENERAL OR MINER)
+	add_subdirectory(libethash)
+	if (ETHASHCL)
+		add_subdirectory(libethash-cl)
+	endif ()
 endif ()
 
 add_subdirectory(libethcore)
-add_subdirectory(libevm)
-add_subdirectory(libethereum)
-add_subdirectory(libwebthree)
+
+if (GENERAL)
+	add_subdirectory(libevm)
+	add_subdirectory(libethereum)
+	add_subdirectory(libwebthree)
+endif ()
+
+if (MINER OR TOOLS)
+	add_subdirectory(ethminer)
+endif ()
+
+if (ETHKEY OR TOOLS)
+	add_subdirectory(ethkey)
+endif ()
 
 if (TESTS)
 	add_subdirectory(libtestutils)
@@ -403,28 +449,57 @@ if (GUI)
 
 endif()
 
-#unset(TARGET_PLATFORM CACHE)
+if (APPLE AND GUI)
+
+	add_custom_target(appdmg
+		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+		COMMAND ${CMAKE_COMMAND}
+		-DAPP_DMG_EXE=${ETH_APP_DMG}
+		-DAPP_DMG_FILE=appdmg.json.in
+		-DAPP_DMG_ICON="alethzero/alethzero.icns"
+		-DAPP_DMG_BACKGROUND="bg.png"
+		-DETH_BUILD_DIR="${CMAKE_BINARY_DIR}"
+		-DETH_MIX_APP="$<TARGET_FILE_DIR:mix>"
+		-DETH_ALETHZERO_APP="$<TARGET_FILE_DIR:AlethZero>"
+		-P "${ETH_SCRIPTS_DIR}/appdmg.cmake"
+	)
+
+endif ()
 
 if (WIN32)
 	# packaging stuff
 	include(InstallRequiredSystemLibraries)
-	set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "ethereum")
+	set(CPACK_PACKAGE_NAME "Ethereum")
+	set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Ethereum")
 	set(CPACK_PACKAGE_VENDOR "ethereum.org")
 	set(CPACK_PACKAGE_DESCRIPTION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 	set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
-	set(CPACK_PACKAGE_VERSION "0.7")
+	set(CPACK_PACKAGE_VERSION "0.9")
 	set(CPACK_GENERATOR "NSIS")
 	# seems to be not working
 	# set(CPACK_PACKAGE_ICON "${CMAKE_CURRENT_SOURCE_DIR}/alethzero/alethzero.bmp")
 
 	# our stuff
 	set(CPACK_COMPONENT_ALETHZERO_GROUP "Applications")
-	set(CPACK_COMPONENT_THIRD_GROUP "Applications")
 	set(CPACK_COMPONENT_MIX_GROUP "Applications")
-	set(CPACK_COMPONENTS_ALL alethzero third mix)
+	set(CPACK_COMPONENT_SOLC_GROUP "CLI")
+	set(CPACK_COMPONENT_ETH_GROUP "CLI")
+	set(CPACK_COMPONENT_ETHMINER_GROUP "CLI")
+	set(CPACK_COMPONENT_RLP_GROUP "CLI")
+	set(CPACK_COMPONENT_ABI_GROUP "CLI")
+
+	set(CPACK_COMPONENTS_ALL alethzero mix solc eth ethminer rlp abi)
 
 	# nsis specific stuff
-	set(CPACK_NSIS_DISPLAY_NAME "${CPACK_PACKAGE_INSTALL_DIRECTORY} ethereum")
+	if (CMAKE_CL_64)
+		set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES64")
+		set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "${CPACK_PACKAGE_NAME} ${CPACK_PACKAGE_VERSION} (Win64)")
+	else ()
+		set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES")
+		set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "${CPACK_PACKAGE_NAME} ${CPACK_PACKAGE_VERSION}")
+	endif()
+
+	set(CPACK_NSIS_DISPLAY_NAME "${CPACK_PACKAGE_INSTALL_DIRECTORY} Ethereum")
 	set(CPACK_NSIS_HELP_LINK "https://github.com/ethereum/cpp-ethereum")
 	set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/ethereum/cpp-ethereum")
 	set(CPACK_NSIS_CONTACT "ethereum.org")

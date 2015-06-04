@@ -37,6 +37,7 @@ var RequestManager = require('./web3/requestmanager');
 var c = require('./utils/config');
 var Method = require('./web3/method');
 var Property = require('./web3/property');
+var Batch = require('./web3/batch');
 
 var web3Methods = [
     new Method({
@@ -58,7 +59,7 @@ var web3Properties = [
     }),
     new Property({
         name: 'version.ethereum',
-        getter: 'eth_version',
+        getter: 'eth_protocolVersion',
         inputFormatter: utils.toDecimal
     }),
     new Property({
@@ -117,6 +118,8 @@ web3.setProvider = function (provider) {
 };
 web3.reset = function () {
     RequestManager.getInstance().reset();
+    c.defaultBlock = 'latest';
+    c.defaultAccount = undefined;
 };
 web3.toHex = utils.toHex;
 web3.toAscii = utils.toAscii;
@@ -127,18 +130,30 @@ web3.toBigNumber = utils.toBigNumber;
 web3.toWei = utils.toWei;
 web3.fromWei = utils.fromWei;
 web3.isAddress = utils.isAddress;
+web3.createBatch = function () {
+    return new Batch();
+};
 
 // ADD defaultblock
 Object.defineProperty(web3.eth, 'defaultBlock', {
     get: function () {
-        return c.ETH_DEFAULTBLOCK;
+        return c.defaultBlock;
     },
     set: function (val) {
-        c.ETH_DEFAULTBLOCK = val;
-        return c.ETH_DEFAULTBLOCK;
+        c.defaultBlock = val;
+        return val;
     }
 });
 
+Object.defineProperty(web3.eth, 'defaultAccount', {
+    get: function () {
+        return c.defaultAccount;
+    },
+    set: function (val) {
+        c.defaultAccount = val;
+        return val;
+    }
+});
 
 /// setups all api methods
 setupMethods(web3, web3Methods);

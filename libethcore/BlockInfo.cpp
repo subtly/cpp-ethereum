@@ -21,11 +21,13 @@
 
 #include <libdevcore/Common.h>
 #include <libdevcore/RLP.h>
-#include <libdevcrypto/TrieDB.h>
+#include <libdevcore/TrieDB.h>
+#include <libdevcore/TrieHash.h>
 #include <libethcore/Common.h>
+#include <libethcore/Params.h>
+#include "EthashAux.h"
 #include "ProofOfWork.h"
 #include "Exceptions.h"
-#include "Params.h"
 #include "BlockInfo.h"
 using namespace std;
 using namespace dev;
@@ -63,8 +65,7 @@ void BlockInfo::clear()
 h256 const& BlockInfo::seedHash() const
 {
 	if (!m_seedHash)
-		for (u256 n = number; n >= c_epochDuration; n -= c_epochDuration)
-			m_seedHash = sha3(m_seedHash);
+		m_seedHash = EthashAux::seedHash((unsigned)number);
 	return m_seedHash;
 }
 
@@ -77,7 +78,7 @@ h256 const& BlockInfo::hash() const
 
 h256 const& BlockInfo::boundary() const
 {
-	if (!m_boundary)
+	if (!m_boundary && difficulty)
 		m_boundary = (h256)(u256)((bigint(1) << 256) / difficulty);
 	return m_boundary;
 }
@@ -145,8 +146,13 @@ void BlockInfo::populateFromHeader(RLP const& _header, Strictness _s, h256 const
 		throw;
 	}
 
+	if (number > ~(unsigned)0)
+		throw InvalidNumber();
+
 	// check it hashes according to proof of work or that it's the genesis block.
 	if (_s == CheckEverything && parentHash && !ProofOfWork::verify(*this))
+		BOOST_THROW_EXCEPTION(InvalidBlockNonce() << errinfo_hash256(headerHash(WithoutNonce)) << errinfo_nonce(nonce) << errinfo_difficulty(difficulty));
+	else if (_s == QuickNonce && parentHash && !ProofOfWork::preVerify(*this))
 		BOOST_THROW_EXCEPTION(InvalidBlockNonce() << errinfo_hash256(headerHash(WithoutNonce)) << errinfo_nonce(nonce) << errinfo_difficulty(difficulty));
 
 	if (_s != CheckNothing)
@@ -168,6 +174,9 @@ void BlockInfo::populateFromHeader(RLP const& _header, Strictness _s, h256 const
 void BlockInfo::populate(bytesConstRef _block, Strictness _s, h256 const& _h)
 {
 	RLP root(_block);
+	if (!root.isList())
+		BOOST_THROW_EXCEPTION(InvalidBlockFormat() << errinfo_comment("block needs to be a list") << BadFieldError(0, _block.toString()));
+
 	RLP header = root[0];
 
 	if (!header.isList())
@@ -180,36 +189,44 @@ void BlockInfo::populate(bytesConstRef _block, Strictness _s, h256 const& _h)
 		BOOST_THROW_EXCEPTION(InvalidBlockFormat() << errinfo_comment("block uncles need to be a list") << BadFieldError(2, root[2].data().toString()));
 }
 
-template <class T, class U> h256 trieRootOver(unsigned _itemCount, T const& _getKey, U const& _getValue)
-{
-	MemoryDB db;
-	GenericTrieDB<MemoryDB> t(&db);
-	t.init();
-	for (unsigned i = 0; i < _itemCount; ++i)
-		t.insert(_getKey(i), _getValue(i));
-	return t.root();
-}
+struct BlockInfoDiagnosticsChannel: public LogChannel { static const char* name() { return EthBlue "▧" EthWhite " ◌"; } static const int verbosity = 9; };
 
 void BlockInfo::verifyInternals(bytesConstRef _block) const
 {
 	RLP root(_block);
 
-	/*OverlayDB db;
-	GenericTrieDB<OverlayDB> t(&db);
-	t.init();
-	unsigned i = 0;
-	for (auto const& tr: root[1])
-	{
-		bytes k = rlp(i);
-		t.insert(&k, tr.data());
-		++i;
-	}
-	if (transactionsRoot != t.root())*/
 	auto txList = root[1];
-	auto expectedRoot = trieRootOver(txList.itemCount(), [&](unsigned i){ return rlp(i); }, [&](unsigned i){ return txList[i].data(); });
-	if (transactionsRoot != expectedRoot)
-		BOOST_THROW_EXCEPTION(InvalidTransactionsHash() << HashMismatchError(expectedRoot, transactionsRoot));
+	auto expectedRoot = trieRootOver(txList.itemCount(), [&](unsigned i){ return rlp(i); }, [&](unsigned i){ return txList[i].data().toBytes(); });
 
+	clog(BlockInfoDiagnosticsChannel) << "Expected trie root:" << toString(expectedRoot);
+	if (transactionsRoot != expectedRoot)
+	{
+		MemoryDB tm;
+		GenericTrieDB<MemoryDB> transactionsTrie(&tm);
+		transactionsTrie.init();
+
+		vector<bytesConstRef> txs;
+
+		for (unsigned i = 0; i < txList.itemCount(); ++i)
+		{
+			RLPStream k;
+			k << i;
+
+			transactionsTrie.insert(&k.out(), txList[i].data());
+
+			txs.push_back(txList[i].data());
+			cdebug << toHex(k.out()) << toHex(txList[i].data());
+		}
+		cdebug << "trieRootOver" << expectedRoot;
+		cdebug << "orderedTrieRoot" << orderedTrieRoot(txs);
+		cdebug << "TrieDB" << transactionsTrie.root();
+		cdebug << "Contents:";
+		for (auto const& t: txs)
+			cdebug << toHex(t);
+
+		BOOST_THROW_EXCEPTION(InvalidTransactionsHash() << HashMismatchError(expectedRoot, transactionsRoot));
+	}
+	clog(BlockInfoDiagnosticsChannel) << "Expected uncle hash:" << toString(sha3(root[2].data()));
 	if (sha3Uncles != sha3(root[2].data()))
 		BOOST_THROW_EXCEPTION(InvalidUnclesHash());
 }
@@ -231,7 +248,10 @@ u256 BlockInfo::selectGasLimit(BlockInfo const& _parent) const
 		return c_genesisGasLimit;
 	else
 		// target minimum of 3141592
-		return max<u256>(max<u256>(c_minGasLimit, 3141592), (_parent.gasLimit * (c_gasLimitBoundDivisor - 1) + (_parent.gasUsed * 6 / 5)) / c_gasLimitBoundDivisor);
+		if (_parent.gasLimit < c_genesisGasLimit)
+			return min<u256>(c_genesisGasLimit, _parent.gasLimit + _parent.gasLimit / c_gasLimitBoundDivisor - 1);
+		else
+			return max<u256>(c_genesisGasLimit, _parent.gasLimit - _parent.gasLimit / c_gasLimitBoundDivisor + 1 + (_parent.gasUsed * 6 / 5) / c_gasLimitBoundDivisor);
 }
 
 u256 BlockInfo::calculateDifficulty(BlockInfo const& _parent) const
@@ -249,9 +269,9 @@ void BlockInfo::verifyParent(BlockInfo const& _parent) const
 		BOOST_THROW_EXCEPTION(InvalidDifficulty() << RequirementError((bigint)calculateDifficulty(_parent), (bigint)difficulty));
 
 	if (gasLimit < c_minGasLimit ||
-		gasLimit < _parent.gasLimit * (c_gasLimitBoundDivisor - 1) / c_gasLimitBoundDivisor ||
-		gasLimit > _parent.gasLimit * (c_gasLimitBoundDivisor + 1) / c_gasLimitBoundDivisor)
-		BOOST_THROW_EXCEPTION(InvalidGasLimit() << errinfo_min((bigint)_parent.gasLimit * (c_gasLimitBoundDivisor - 1) / c_gasLimitBoundDivisor) << errinfo_got((bigint)gasLimit) << errinfo_max((bigint)_parent.gasLimit * (c_gasLimitBoundDivisor + 1) / c_gasLimitBoundDivisor));
+		gasLimit <= _parent.gasLimit - _parent.gasLimit / c_gasLimitBoundDivisor ||
+		gasLimit >= _parent.gasLimit + _parent.gasLimit / c_gasLimitBoundDivisor)
+		BOOST_THROW_EXCEPTION(InvalidGasLimit() << errinfo_min((bigint)_parent.gasLimit - _parent.gasLimit / c_gasLimitBoundDivisor) << errinfo_got((bigint)gasLimit) << errinfo_max((bigint)_parent.gasLimit + _parent.gasLimit / c_gasLimitBoundDivisor));
 
 	// Check timestamp is after previous timestamp.
 	if (parentHash)

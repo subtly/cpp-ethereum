@@ -73,8 +73,30 @@ Item {
 				}
 			}
 
+			CheckBox
+			{
+				text: qsTr("Mine")
+				onCheckedChanged: {
+					mineAction.enabled = !checked;
+					mineTimer.running = checked;
+				}
+			}
+
+			Timer
+			{
+				id: mineTimer
+				repeat: true;
+				interval: 12000
+				running: false
+				onTriggered:
+				{
+					clientModel.mine();
+				}
+			}
+
 			Button
 			{
+				id: mineBtn
 				anchors.rightMargin: 9
 				anchors.verticalCenter: parent.verticalCenter
 				action: mineAction
@@ -151,7 +173,7 @@ Item {
 			Keys.onPressed: {
 				if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_C && currentRow >=0 && currentRow < logTable.model.count) {
 					var item = logTable.model.get(currentRow);
-					appContext.toClipboard(item.returned);
+					clipboard.text = item.returned;
 				}
 			}
 		}

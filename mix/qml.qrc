@@ -8,7 +8,6 @@
         <file>qml/CodeEditorStyle.qml</file>
         <file>qml/CodeEditorView.qml</file>
         <file>qml/CommonSeparator.qml</file>
-        <file>qml/ContractLibrary.qml</file>
         <file>qml/DebugBasicInfo.qml</file>
         <file>qml/DebugInfoList.qml</file>
         <file>qml/Debugger.qml</file>
@@ -48,8 +47,8 @@
         <file>qml/StatusPaneStyle.qml</file>
         <file>qml/StepActionImage.qml</file>
         <file>qml/StorageView.qml</file>
-		<file>qml/StatesComboBox.qml</file>
-		<file>qml/StructView.qml</file>
+        <file>qml/StatesComboBox.qml</file>
+        <file>qml/StructView.qml</file>
         <file>qml/Style.qml</file>
         <file>qml/TabStyle.qml</file>
         <file>qml/TransactionDialog.qml</file>
@@ -63,5 +62,7 @@
         <file>qml/js/TransactionHelper.js</file>
         <file>qml/js/Printer.js</file>
         <file>qml/js/ansi2html.js</file>
+        <file>qml/js/NetworkDeployment.js</file>
+        <file>qml/js/InputValidator.js</file>
     </qresource>
 </RCC>

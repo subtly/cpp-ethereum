@@ -3,7 +3,6 @@ import QtQuick.Controls 1.1
 import QtQuick.Layouts 1.1
 import QtQuick.Controls.Styles 1.3
 import org.ethereum.qml.InverseMouseArea 1.0
-import QtGraphicalEffects 1.0
 import "js/ErrorLocationFormater.js" as ErrorLocationFormater
 import "."
 
@@ -53,6 +52,12 @@ Rectangle {
 		status.text = text;
 		logPane.push("error", type, text);
 		currentStatus = { "type": type, "date": Qt.formatDateTime(new Date(), "hh:mm:ss"), "content": text, "level": "error" }
+	}
+
+	function clear()
+	{
+		status.state = "";
+		status.text = "";
 	}
 
 	StatusPaneStyle {
@@ -142,7 +147,6 @@ Rectangle {
 			anchors.verticalCenter: parent.verticalCenter
 			anchors.horizontalCenter: parent.horizontalCenter
 			font.pointSize: appStyle.absoluteSize(-1)
-			height: 15
 			font.family: "sans serif"
 			objectName: "status"
 			wrapMode: Text.WrapAnywhere
@@ -187,25 +191,32 @@ Rectangle {
 				else
 					width = undefined
 			}
+		}
 
-			Button
-			{
-				anchors.fill: parent
-				id: toolTip
-				action: toolTipInfo
-				text: ""
-				z: 3;
-				style:
-					ButtonStyle {
-					background:Rectangle {
-						color: "transparent"
-					}
+		Button
+		{
+			anchors.fill: parent
+			id: toolTip
+			action: toolTipInfo
+			text: ""
+			z: 3;
+			style:
+				ButtonStyle {
+				background:Rectangle {
+					color: "transparent"
 				}
-				MouseArea {
-					anchors.fill: parent
-					onClicked: {
+			}
+			MouseArea {
+				anchors.fill: parent
+				onClicked: {
+					var globalCoord = goToLineBtn.mapToItem(statusContainer, 0, 0);
+					if (mouseX > globalCoord.x
+							&& mouseX < globalCoord.x + goToLineBtn.width
+							&& mouseY > globalCoord.y
+							&& mouseY < globalCoord.y + goToLineBtn.height)
+						goToCompilationError.trigger(goToLineBtn);
+					else
 						logsContainer.toggle();
-					}
 				}
 			}
 		}
@@ -240,13 +251,13 @@ Rectangle {
 							background: Rectangle {
 								color: "transparent"
 
-								Image { 
+								Image {
 									source: "qrc:/qml/img/warningicon.png"
 									height: 30
 									width: 30
 									sourceSize.width: 30
-        							sourceSize.height: 30
-        							anchors.centerIn: parent
+									sourceSize.height: 30
+									anchors.centerIn: parent
 								}
 							}
 						}
@@ -297,14 +308,17 @@ Rectangle {
 			{
 				if (logsContainer.state === "opened")
 				{
+					statusContainer.visible = true
 					logsContainer.state = "closed"
 				}
 				else
 				{
+					statusContainer.visible = false
 					logsContainer.state = "opened";
 					logsContainer.focus = true;
 					forceActiveFocus();
-					calCoord();
+					calCoord()
+					move()
 				}
 			}
 
@@ -317,20 +331,29 @@ Rectangle {
 
 			function calCoord()
 			{
+				if (!logsContainer.parent.parent)
+					return
 				var top = logsContainer;
 				while (top.parent)
 					top = top.parent
 				var coordinates = logsContainer.mapToItem(top, 0, 0);
 				logsContainer.parent = top;
 				logsShadow.parent = top;
-				logsContainer.x = status.x + statusContainer.x - logStyle.generic.layout.dateWidth - logStyle.generic.layout.typeWidth + 70
-				logsShadow.x = status.x + statusContainer.x - logStyle.generic.layout.dateWidth - logStyle.generic.layout.typeWidth + 70;
+				top.onWidthChanged.connect(move)
+				top.onHeightChanged.connect(move)
+			}
+
+			function move()
+			{
+				var statusGlobalCoord = status.mapToItem(null, 0, 0);
+				logsContainer.x = statusGlobalCoord.x - logPane.contentXPos
+				logsShadow.x = statusGlobalCoord.x - logPane.contentXPos
 				logsShadow.z = 1
 				logsContainer.z = 2
 				if (Qt.platform.os === "osx")
 				{
-					logsContainer.y = statusContainer.y;
-					logsShadow.y = statusContainer.y;
+					logsContainer.y = statusGlobalCoord.y;
+					logsShadow.y = statusGlobalCoord.y;
 				}
 			}
 
@@ -341,6 +364,11 @@ Rectangle {
 			LogsPane
 			{
 				id: logPane;
+				statusPane: statusHeader
+				onContentXPosChanged:
+				{
+					parent.move();
+				}
 			}
 
 			states: [

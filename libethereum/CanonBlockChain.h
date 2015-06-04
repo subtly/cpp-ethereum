@@ -34,7 +34,6 @@
 #include <libdevcore/Guards.h>
 #include "BlockDetails.h"
 #include "Account.h"
-#include "BlockQueue.h"
 #include "BlockChain.h"
 namespace ldb = leveldb;
 
@@ -45,7 +44,7 @@ namespace eth
 {
 
 // TODO: Move all this Genesis stuff into Genesis.h/.cpp
-std::map<Address, Account> const& genesisState();
+std::unordered_map<Address, Account> const& genesisState();
 
 /**
  * @brief Implements the blockchain database. All data this gives is disk-backed.

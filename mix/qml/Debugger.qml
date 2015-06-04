@@ -4,7 +4,6 @@ import QtQuick.Controls.Styles 1.1
 import QtQuick.Dialogs 1.1
 import QtQuick.Layouts 1.1
 import Qt.labs.settings 1.0
-import QtGraphicalEffects 1.0
 import "js/Debugger.js" as Debugger
 import "js/ErrorLocationFormater.js" as ErrorLocationFormater
 import "."
@@ -17,6 +16,10 @@ Rectangle {
 	property alias solLocals: solLocals
 	property alias solStorage: solStorage
 	property alias solCallStack: solCallStack
+	property alias vmCallStack: callStack
+	property alias vmStorage: storage
+	property alias vmMemory: memoryDump
+	property alias vmCallData: callDataDump
 	signal debugExecuteLocation(string documentId, var location)
 	property string compilationErrorMessage
 	property bool assemblyMode: false
@@ -207,8 +210,8 @@ Rectangle {
 				anchors.top: parent.top
 				anchors.topMargin: 15
 				anchors.left: parent.left;
-				anchors.leftMargin: machineStates.sideMargin 
-				width: debugScrollArea.width - machineStates.sideMargin * 2 - 20 ;
+				anchors.leftMargin: machineStates.sideMargin
+				width: debugScrollArea.width - machineStates.sideMargin * 2 - 20
 				spacing: machineStates.sideMargin
 
 				Rectangle {
@@ -636,9 +639,6 @@ Rectangle {
 							onRowActivated: Debugger.displayFrame(index);
 						}
 					}
-
-
-
 
 					Rectangle
 					{
