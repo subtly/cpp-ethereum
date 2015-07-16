@@ -20,7 +20,11 @@
 */
 
 
+#ifdef _WIN32
 #define _CRT_SECURE_NO_WARNINGS
+#include <Windows.h>
+#include <io.h>
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -71,6 +75,16 @@ ethash_cl_miner::search_hook::~search_hook() {}
 ethash_cl_miner::ethash_cl_miner()
 :	m_openclOnePointOne()
 {
+#ifdef _WIN32
+	HINSTANCE HOpenCLDLL = NULL;
+	void* OpenCLDLL = static_cast<HINSTANCE>(HOpenCLDLL);
+	OpenCLDLL = LoadLibrary("OpenCL.dll");
+	if (!static_cast<HINSTANCE>(OpenCLDLL))
+	{
+		FreeLibrary(static_cast<HINSTANCE>(OpenCLDLL));
+		throw std::runtime_error("Unable to load OpenCL.dll");
+	}
+#endif
 }
 
 ethash_cl_miner::~ethash_cl_miner()
